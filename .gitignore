@@ -6,5 +6,13 @@ target/
 !.env.example
 docs/
 
+# Wrangler local dev state (miniflare storage, temp bundles)
+.wrangler/
+
+# Editor, tool and OS files
+.idea/
+.serena/
+.DS_Store
+
 # moon runtime cache
 .moon/cache/
