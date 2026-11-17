@@ -1,0 +1,15 @@
+[package]
+name = "opencut-time"
+description = "Integer-tick media time, frame rates and timecodes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "opencut_time"
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
