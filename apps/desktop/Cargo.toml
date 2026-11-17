@@ -11,3 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 gpui = { workspace = true }
+
+# Compile Metal shaders at runtime instead of in gpui's build.rs, so building
+# only needs the Xcode Command Line Tools (no full Xcode / `metal` compiler).
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui = { workspace = true, features = ["runtime_shaders"] }

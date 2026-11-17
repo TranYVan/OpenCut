@@ -1,0 +1,23 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+layer: 'library'
+
+fileGroups:
+  sources:
+    - 'src/**/*'
+    - 'tests/**/*'
+    - 'Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+
+tasks:
+  check:
+    command: 'cargo check -p opencut-editor --all-targets'
+    inputs:
+      - '@group(sources)'
+
+  test:
+    command: 'cargo test -p opencut-editor'
+    inputs:
+      - '@group(sources)'
