@@ -22,6 +22,8 @@ pub enum MediaError {
         code: i32,
         message: String,
     },
+    #[error("{path} has no audio stream")]
+    NoAudioStream { path: PathBuf },
 }
 
 impl MediaError {
