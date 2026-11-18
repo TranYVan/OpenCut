@@ -149,8 +149,9 @@ fn generate_bindings(include: &Path, out_dir: &Path) {
     // A struct whose definition clang didn't see comes out as an empty
     // placeholder (`_address`), which only fails later with confusing
     // "no field" errors.
-    let code = bindings.to_string();
-    if code.contains("pub struct AVFormatContext {\n    pub _address: u8,") {
+    // Whitespace-free, since the output isn't formatted.
+    let code: String = bindings.to_string().split_whitespace().collect();
+    if code.contains("pubstructAVFormatContext{pub_address:u8") {
         fail(&format!(
             "bindgen saw no definition of AVFormatContext (libclang: {:?}, include: {})",
             bindgen::clang_version(),

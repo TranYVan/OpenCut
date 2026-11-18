@@ -25,4 +25,5 @@ tasks:
       - '/Cargo.toml'
       - '/Cargo.lock'
     outputs:
-      - '/target/release/opencut-desktop'
+      # Glob: the binary is opencut-desktop.exe on Windows.
+      - '/target/release/opencut-desktop*'

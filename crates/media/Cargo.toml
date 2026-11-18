@@ -17,7 +17,8 @@ opencut-time = { workspace = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
-bindgen = "0.71"
+# Without prettyplease: 0.73.2 mixes syn 2 and 3 there and fails to build.
+bindgen = { version = "0.73", default-features = false, features = ["runtime"] }
 serde_json = { workspace = true }
 
 [dev-dependencies]
