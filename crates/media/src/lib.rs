@@ -3,11 +3,14 @@
 //!
 //! - [`probe`] reads what a file is: kind, duration, size, frame rate,
 //!   codecs, and maps it into an [`opencut_model::MediaAsset`].
+//! - [`video`] decodes frames at a source time, caches them, and makes
+//!   thumbnails, on a worker thread.
 
 mod error;
 mod ffi;
 mod format;
 mod probe;
+pub mod video;
 
 pub use error::MediaError;
 pub use probe::{MediaInfo, probe, probe_asset};
