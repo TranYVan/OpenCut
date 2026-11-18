@@ -1,0 +1,25 @@
+[package]
+name = "opencut-media"
+description = "OpenCut media I/O on FFmpeg: probing, and later decoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# Lets dependents' build scripts find the FFmpeg libraries through
+# DEP_OPENCUT_FFMPEG_LIB_DIR (and _BIN_DIR on Windows) to set their rpath.
+links = "opencut-ffmpeg"
+
+[lib]
+name = "opencut_media"
+
+[dependencies]
+opencut-model = { workspace = true }
+opencut-time = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+bindgen = "0.71"
+serde_json = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = "1"
+serde_json = { workspace = true }

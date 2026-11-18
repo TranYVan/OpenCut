@@ -1,0 +1,37 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+layer: 'library'
+
+fileGroups:
+  sources:
+    - 'src/**/*'
+    - 'tests/**/*'
+    - 'build.rs'
+    - 'wrapper.h'
+    - 'Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+
+tasks:
+  # Puts the pinned FFmpeg into /.cache/media/ (a no-op when it's there).
+  # Not cached by moon: the script checks its own stamp.
+  setup:
+    command: 'bun run setup/setup.ts'
+    toolchains: ['system']
+    inputs:
+      - 'setup/**/*'
+    options:
+      cache: false
+
+  check:
+    command: 'cargo check -p opencut-media --all-targets'
+    deps: ['~:setup']
+    inputs:
+      - '@group(sources)'
+
+  test:
+    command: 'cargo test -p opencut-media'
+    deps: ['~:setup']
+    inputs:
+      - '@group(sources)'

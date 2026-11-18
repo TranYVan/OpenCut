@@ -2,10 +2,10 @@
 resolver = "3"
 members = [
   'apps/desktop',
-  # Listed one by one: crates/media holds only FFmpeg setup scripts so far.
   'crates/time',
   'crates/model',
   'crates/editor',
+  'crates/media',
 ]
 
 [workspace.package]
@@ -24,3 +24,4 @@ uuid = { version = "1", features = ["v4"] }
 opencut-time = { path = "crates/time" }
 opencut-model = { path = "crates/model" }
 opencut-editor = { path = "crates/editor" }
+opencut-media = { path = "crates/media" }

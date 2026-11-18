@@ -33,5 +33,13 @@ jobs:
           auto-install: true
           auto-setup: true
 
+      # FFmpeg for crates/media: a prebuilt download, or a source build where
+      # none is pinned (macOS), so worth keeping between runs.
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/media
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/media/setup/**') }}
+
       - name: Run CI
         run: moon ci

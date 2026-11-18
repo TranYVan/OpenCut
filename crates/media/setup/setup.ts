@@ -129,6 +129,12 @@ function configureFlags(target: Platform, host: Platform): string[] {
       break;
   }
 
+  // The PNG decoder needs zlib, which --disable-autodetect leaves out. The
+  // system's own on macOS and Linux (every distribution has libz.so.1).
+  // TODO: llvm-mingw has none, so Windows source builds can't decode PNG
+  // until zlib is built for them; the pinned Windows prebuilts include it.
+  if (target.os !== "windows") flags.push("--enable-zlib");
+
   if (target.arch === "x86_64" && !Bun.which("nasm")) {
     console.warn("nasm not found: building without x86 assembly, so decoding is slower");
     flags.push("--disable-x86asm");

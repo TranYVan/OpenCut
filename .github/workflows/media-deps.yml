@@ -58,6 +58,10 @@ jobs:
         if: runner.os == 'Linux' && endsWith(matrix.platform, 'x86_64')
         run: sudo apt-get update && sudo apt-get install -y nasm
 
+      - name: Install zlib headers (Linux)
+        if: startsWith(matrix.platform, 'linux-')
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+
       - name: Install nasm (macOS)
         if: matrix.platform == 'macos-x86_64'
         run: brew install nasm

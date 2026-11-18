@@ -26,3 +26,6 @@ docs/
 
 # wrangler local dev state (miniflare sqlite)
 .wrangler/
+
+# FFmpeg builds from crates/media/setup
+.cache/
