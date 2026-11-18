@@ -16,3 +16,13 @@ docs/
 
 # moon runtime cache
 .moon/cache/
+
+# OS
+.DS_Store
+
+# IDE / tooling
+.idea/
+.serena/
+
+# wrangler local dev state (miniflare sqlite)
+.wrangler/
