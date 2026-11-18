@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, Entity, ExternalPaths, FocusHandle, Hsla, MouseButton, MouseDownEvent,
-    ObjectFit, RenderImage, Subscription, Window, actions, div, img, prelude::*, px,
+    ObjectFit, RenderImage, Subscription, Window, actions, div, img, prelude::*, px, relative,
     transparent_black,
 };
 use opencut_editor::model::{MediaAsset, MediaType};
@@ -27,6 +27,8 @@ const TILE_HEIGHT: f32 = 68.0;
 enum ThumbnailState {
     Loading,
     Ready(Arc<RenderImage>),
+    /// Bar heights of an audio waveform, `0.0..=1.0`.
+    Waveform(Arc<[f32]>),
     /// Nothing to show: the placeholder tile.
     Missing,
 }
@@ -106,13 +108,13 @@ impl Browser {
             let work = cx.background_executor().spawn(async move {
                 provider
                     .thumbnail(&path, &asset, THUMBNAIL_EDGE)
-                    .and_then(render_image)
+                    .and_then(thumbnail_state)
             });
             cx.spawn(async move |this, cx| {
                 let image = work.await;
                 let _ = this.update(cx, |this, cx| {
-                    let state = image.map_or(ThumbnailState::Missing, ThumbnailState::Ready);
-                    this.thumbnails.insert(id, state);
+                    this.thumbnails
+                        .insert(id, image.unwrap_or(ThumbnailState::Missing));
                     cx.notify();
                 });
             })
@@ -214,6 +216,7 @@ impl Browser {
                 .size_full()
                 .object_fit(ObjectFit::Cover)
                 .into_any_element(),
+            Some(ThumbnailState::Waveform(bars)) => waveform(bars, accent).into_any_element(),
             Some(ThumbnailState::Loading) => div().into_any_element(),
             Some(ThumbnailState::Missing) | None => div()
                 .text_color(accent)
@@ -411,18 +414,44 @@ impl Render for Browser {
     }
 }
 
-/// GPUI draws BGRA; providers hand out RGBA.
-fn render_image(thumbnail: Thumbnail) -> Option<Arc<RenderImage>> {
-    let Thumbnail {
-        width,
-        height,
-        mut rgba,
-    } = thumbnail;
-    for pixel in rgba.chunks_exact_mut(4) {
-        pixel.swap(0, 2);
+/// Turns a provider's thumbnail into what the card draws. Runs on the
+/// background executor.
+fn thumbnail_state(thumbnail: Thumbnail) -> Option<ThumbnailState> {
+    match thumbnail {
+        Thumbnail::Picture {
+            width,
+            height,
+            bgra,
+        } => {
+            // `RenderImage` takes BGRA bytes in an `RgbaImage` container.
+            let buffer = image::RgbaImage::from_raw(width, height, bgra)?;
+            let image = RenderImage::new(vec![image::Frame::new(buffer)]);
+            Some(ThumbnailState::Ready(Arc::new(image)))
+        }
+        Thumbnail::Waveform(bars) if !bars.is_empty() => {
+            Some(ThumbnailState::Waveform(bars.into()))
+        }
+        Thumbnail::Waveform(_) => None,
     }
-    let buffer = image::RgbaImage::from_raw(width, height, rgba)?;
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+}
+
+/// Centered bars, one per amplitude, in the audio type color.
+fn waveform(bars: &[f32], color: Hsla) -> impl IntoElement {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(1.0))
+        .size_full()
+        .px(px(6.0))
+        .py(px(8.0))
+        .children(bars.iter().map(|amplitude| {
+            div()
+                .flex_1()
+                .min_h(px(1.0))
+                .h(relative(amplitude.clamp(0.0, 1.0)))
+                .rounded(px(1.0))
+                .bg(color)
+        }))
 }
 
 fn type_color(media_type: MediaType, window: &Window) -> Hsla {

@@ -5,4 +5,4 @@ mod import;
 mod thumbnail;
 
 pub(crate) use import::{ProjectFiles, import_file, import_image_bytes, paths_in_text};
-pub(crate) use thumbnail::{PlaceholderThumbnails, THUMBNAIL_EDGE, Thumbnail, ThumbnailProvider};
+pub(crate) use thumbnail::{MediaThumbnails, THUMBNAIL_EDGE, Thumbnail, ThumbnailProvider};

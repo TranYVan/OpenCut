@@ -4,7 +4,7 @@ use gpui::{
     App, Context, Entity, ExternalPaths, FocusHandle, KeyBinding, Window, actions, div, prelude::*,
 };
 
-use crate::media::PlaceholderThumbnails;
+use crate::media::MediaThumbnails;
 use crate::panels::{
     BROWSER_KEY_CONTEXT, Browser, Inspector, Preview, RemoveSelectedMedia, Timeline,
 };
@@ -42,11 +42,9 @@ pub(crate) struct Shell {
 impl Shell {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let workspace = cx.new(|_| Workspace::new());
-        let browser = cx.new(|cx| {
-            // TODO(#3, #4): swap in a provider backed by opencut-media's
-            // poster frames and waveforms.
-            Browser::new(workspace.clone(), Arc::new(PlaceholderThumbnails), cx)
-        });
+        let waveform_dir = workspace.read(cx).files().cache_dir().join("waveforms");
+        let thumbnails = Arc::new(MediaThumbnails::new(waveform_dir));
+        let browser = cx.new(|cx| Browser::new(workspace.clone(), thumbnails, cx));
         let focus_handle = cx.focus_handle();
         // Actions dispatch from the focused element up, so start focused.
         window.focus(&focus_handle);

@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use opencut_editor::model::{MediaAsset, new_id};
 
 /// Where a project's files live on disk: `<app data>/OpenCut/projects/<id>`,
-/// with imported media in `media/`.
+/// with imported media in `media/` and derived data (waveform summaries)
+/// in `cache/`.
 ///
 /// TODO(#15): projects aren't saved or reopened yet, so every launch starts
 /// a new project folder. Saving and loading should take this over.
@@ -25,6 +26,11 @@ impl ProjectFiles {
 
     pub(crate) fn media_dir(&self) -> PathBuf {
         self.root.join("media")
+    }
+
+    /// Data derived from the media that can be rebuilt, e.g. waveforms.
+    pub(crate) fn cache_dir(&self) -> PathBuf {
+        self.root.join("cache")
     }
 
     /// The project's copy of an asset's file: `media/<asset id>.<ext>`,

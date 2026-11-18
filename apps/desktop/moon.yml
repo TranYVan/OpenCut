@@ -20,6 +20,18 @@ tasks:
       - '/Cargo.toml'
       - '/Cargo.lock'
 
+  # Unit tests; the thumbnail tests decode crates/media's fixtures.
+  test:
+    command: 'cargo test -p opencut-desktop'
+    deps: ['media:setup']
+    inputs:
+      - 'src/**/*'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - '/Cargo.toml'
+      - '/Cargo.lock'
+      - '/crates/media/tests/fixtures/**/*'
+
   build:
     command: 'cargo build --release'
     deps: ['media:setup']
