@@ -48,6 +48,12 @@ fn main() {
         // macOS install names are @rpath/…, Linux sonames are bare: both are
         // found through the rpath. This covers this crate's own tests and
         // examples; dependents set theirs from DEP_OPENCUT_FFMPEG_LIB_DIR.
+        if target_os == "linux" {
+            // An old-style DT_RPATH: the default DT_RUNPATH only covers the
+            // binary's direct dependencies, not the FFmpeg libraries that
+            // load each other (libswresample went missing in CI).
+            println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
+        }
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
     }
 
