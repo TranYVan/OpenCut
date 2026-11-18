@@ -32,6 +32,10 @@ pub enum EditError {
     NothingToSplit(MediaTime),
     #[error("invalid project settings: {0}")]
     InvalidSettings(ValidationError),
+    #[error("media asset {0} not found")]
+    MediaAssetNotFound(String),
+    #[error("a media asset with id {0} already exists")]
+    DuplicateMediaAsset(String),
     #[error("nothing to do")]
     Empty,
 }
