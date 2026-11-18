@@ -18,6 +18,8 @@ jobs:
   ci:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Let every OS finish, so one failure shows all platform problems.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
