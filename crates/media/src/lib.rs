@@ -1,0 +1,21 @@
+//! OpenCut media I/O, built on the shared FFmpeg that `setup/setup.ts`
+//! fetches (see `build.rs`).
+//!
+//! - [`probe`] reads what a file is: kind, duration, size, frame rate,
+//!   codecs, and maps it into an [`opencut_model::MediaAsset`].
+
+mod error;
+mod ffi;
+mod format;
+mod probe;
+
+pub use error::MediaError;
+pub use probe::{MediaInfo, probe, probe_asset};
+
+/// The FFmpeg version linked, e.g. `8.1.3`.
+pub fn ffmpeg_version() -> String {
+    // SAFETY: av_version_info returns a static NUL-terminated string.
+    unsafe { std::ffi::CStr::from_ptr(ffi::av_version_info()) }
+        .to_string_lossy()
+        .into_owned()
+}

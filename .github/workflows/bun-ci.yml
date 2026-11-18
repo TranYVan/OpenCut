@@ -18,6 +18,8 @@ jobs:
   ci:
     runs-on: ${{ matrix.os }}
     strategy:
+      # Let every OS finish, so one failure shows all platform problems.
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
@@ -32,6 +34,22 @@ jobs:
         with:
           auto-install: true
           auto-setup: true
+
+      # GPUI links X11/Wayland libraries on Linux; bindgen needs libclang.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb1-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libfontconfig-dev libvulkan1 libclang-dev
+
+      # FFmpeg for crates/media: a prebuilt download, or a source build where
+      # none is pinned (macOS), so worth keeping between runs.
+      - name: Cache FFmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/media
+          key: ffmpeg-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/media/setup/**') }}
 
       - name: Run CI
         run: moon ci
