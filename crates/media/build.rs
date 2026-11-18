@@ -86,7 +86,9 @@ fn locate(manifest_dir: &Path, target_os: &str, target_arch: &str) -> PathBuf {
         other => fail(&format!("no FFmpeg build for target OS {other}")),
     };
     let key = format!("ffmpeg-{version}-{os}-{target_arch}");
-    let root = manifest_dir.join("../..").canonicalize().unwrap();
+    // Not canonicalize(): on Windows that makes a \\?\ path, which clang
+    // can't use with -I.
+    let root = manifest_dir.parent().and_then(Path::parent).unwrap();
     let dir = root.join(".cache").join("media").join(&key);
 
     if !dir.join(".complete").is_file() {
@@ -144,6 +146,17 @@ fn generate_bindings(include: &Path, out_dir: &Path) {
         .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
         .generate()
         .unwrap_or_else(|error| fail(&format!("generating FFmpeg bindings failed: {error}")));
+    // A struct whose definition clang didn't see comes out as an empty
+    // placeholder (`_address`), which only fails later with confusing
+    // "no field" errors.
+    let code = bindings.to_string();
+    if code.contains("pub struct AVFormatContext {\n    pub _address: u8,") {
+        fail(&format!(
+            "bindgen saw no definition of AVFormatContext (libclang: {:?}, include: {})",
+            bindgen::clang_version(),
+            include.display()
+        ));
+    }
     bindings.write_to_file(out_dir.join("ffmpeg.rs")).unwrap();
 }
 
