@@ -117,7 +117,7 @@ impl ContextMenu {
         }
     }
 
-    fn open(&mut self, position: Point<Pixels>, cx: &mut gpui::Context<Self>) {
+    pub(crate) fn open(&mut self, position: Point<Pixels>, cx: &mut gpui::Context<Self>) {
         self.position = Some(position);
         cx.notify();
     }

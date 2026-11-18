@@ -4,9 +4,11 @@ use gpui::{
 };
 
 mod components;
+mod media;
 mod panels;
 mod shell;
 mod theme;
+mod workspace;
 
 use shell::Shell;
 
@@ -32,6 +34,7 @@ fn main() {
     }
 
     Application::new().run(|cx: &mut App| {
+        shell::bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(960.), px(600.)), cx);
         cx.open_window(
             WindowOptions {
@@ -49,7 +52,7 @@ fn main() {
                     })
                     .detach();
 
-                    Shell::new(cx)
+                    Shell::new(window, cx)
                 })
             },
         )

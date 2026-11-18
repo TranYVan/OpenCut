@@ -6,21 +6,26 @@ layer: 'application'
 tasks:
   dev:
     command: 'cargo run'
+    deps: ['media:setup']
     options:
       runInCI: false
 
   check:
     command: 'cargo check'
+    deps: ['media:setup']
     inputs:
       - 'src/**/*'
+      - 'build.rs'
       - 'Cargo.toml'
       - '/Cargo.toml'
       - '/Cargo.lock'
 
   build:
     command: 'cargo build --release'
+    deps: ['media:setup']
     inputs:
       - 'src/**/*'
+      - 'build.rs'
       - 'Cargo.toml'
       - '/Cargo.toml'
       - '/Cargo.lock'
