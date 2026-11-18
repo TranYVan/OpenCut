@@ -3,12 +3,19 @@
 //!
 //! - [`probe`] reads what a file is: kind, duration, size, frame rate,
 //!   codecs, and maps it into an [`opencut_model::MediaAsset`].
+//! - [`audio`] decodes audio to `f32` PCM ([`decode_audio`]) and makes
+//!   waveform summaries ([`waveform_summary`], [`WaveformCache`]).
 
+pub mod audio;
 mod error;
 mod ffi;
 mod format;
 mod probe;
 
+pub use audio::{
+    AudioDecoder, AudioFormat, DecodedAudio, WaveformCache, WaveformSummary, decode_audio,
+    waveform_summary,
+};
 pub use error::MediaError;
 pub use probe::{MediaInfo, probe, probe_asset};
 
