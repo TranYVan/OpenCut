@@ -16,6 +16,8 @@ pub enum MediaError {
     Open { path: PathBuf, message: String },
     #[error("{path} has no video, image or audio stream")]
     NoMediaStreams { path: PathBuf },
+    #[error("{path} has no decodable video")]
+    NoVideo { path: PathBuf },
     #[error("FFmpeg: {operation} failed: {message}")]
     Ffmpeg {
         operation: &'static str,
