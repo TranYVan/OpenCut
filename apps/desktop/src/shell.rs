@@ -61,7 +61,7 @@ impl EditorPanels {
         let thumbnails = Arc::new(MediaThumbnails::new(waveform_dir));
         Self {
             browser: cx.new(|cx| Browser::new(workspace.clone(), thumbnails.clone(), cx)),
-            preview: cx.new(|_| Preview),
+            preview: cx.new(|cx| Preview::new(workspace.clone(), cx)),
             inspector: cx.new(|_| Inspector),
             timeline: cx.new(|cx| Timeline::new(workspace.clone(), thumbnails, cx)),
             workspace,
