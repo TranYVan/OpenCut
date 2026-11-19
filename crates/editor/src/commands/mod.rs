@@ -7,11 +7,12 @@ mod clipboard;
 mod elements;
 mod media;
 mod properties;
+mod scenes;
 mod settings;
 mod tracks;
 
 pub use audio::{ToggleElementsMuted, ToggleSourceAudio};
-pub use bookmarks::ToggleBookmark;
+pub use bookmarks::{MoveBookmark, ToggleBookmark, UpdateBookmark};
 pub use clipboard::{Clipboard, ClipboardItem, PasteElements};
 pub use elements::{
     DEFAULT_ELEMENT_DURATION, DeleteElements, DuplicateElements, Edge, ElementMove, InsertElement,
@@ -20,5 +21,6 @@ pub use elements::{
 };
 pub use media::{AddMediaAsset, RemoveMediaAssets};
 pub use properties::{SetElementParam, SetElementRetime, ToggleSourceAudioSeparation};
+pub use scenes::{CreateScene, DeleteScene, RenameScene};
 pub use settings::UpdateProjectSettings;
 pub use tracks::{AddTrack, RemoveTrack, ToggleTrackMute, ToggleTrackVisibility};

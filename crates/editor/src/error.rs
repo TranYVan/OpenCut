@@ -48,4 +48,12 @@ pub enum EditError {
     NoSourceAudioOn(ElementKind),
     #[error("nothing to do")]
     Empty,
+    #[error("scene {0} not found")]
+    SceneNotFound(String),
+    #[error("the main or only scene cannot be deleted")]
+    CannotDeleteMainScene,
+    #[error("no bookmark at {0:?}")]
+    BookmarkNotFound(MediaTime),
+    #[error("a bookmark already exists at {0:?}")]
+    BookmarkExists(MediaTime),
 }
