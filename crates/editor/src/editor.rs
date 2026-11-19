@@ -5,6 +5,7 @@ use opencut_model::{Project, SceneTracks, TimelineViewState, ValidationError};
 use crate::command::{Command, Outcome};
 use crate::error::EditError;
 use crate::playback::Playback;
+use crate::ripple::{apply_ripple_adjustments, compute_ripple_adjustments};
 use crate::selection::Selection;
 
 /// Undo steps kept before the oldest is dropped.
@@ -96,10 +97,14 @@ impl Editor {
     /// Runs a command as one undo step. On error the project is unchanged.
     pub fn execute(&mut self, command: &mut dyn Command) -> Result<Outcome, EditError> {
         let before = self.project.clone();
+        let tracks_before = self.ripple_enabled.then(|| self.tracks().clone());
         let result = command.apply(&mut self.project).and_then(|outcome| {
             // `tracks()` relies on this.
             if self.project.current_scene().is_none() {
                 return Err(EditError::NoCurrentScene);
+            }
+            if let Some(tracks_before) = &tracks_before {
+                self.ripple(tracks_before);
             }
             Ok(outcome)
         });
@@ -268,6 +273,14 @@ impl Editor {
     fn restore(&mut self, mut project: Project) {
         project.timeline_view_state = self.project.timeline_view_state.take();
         self.project = project;
+    }
+
+    /// Closes the gaps a command left in the current scene (classic ripple).
+    fn ripple(&mut self, before: &SceneTracks) {
+        if let Some(scene) = self.project.current_scene_mut() {
+            let adjustments = compute_ripple_adjustments(before, &scene.tracks);
+            apply_ripple_adjustments(&mut scene.tracks, &adjustments);
+        }
     }
 
     fn prune_selection(&mut self) {
