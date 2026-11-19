@@ -8,8 +8,8 @@
 //! (`transform.positionX/Y`, `transform.scaleX/Y`, `transform.rotate`),
 //! `opacity`, `blendMode`, hidden tracks and elements, trim and playback
 //! rate. Not yet: text, stickers, graphics (P7), effects and effect layers,
-//! masks, the blur background (P8), and keyframe animation (P9): animated
-//! properties use their base param value.
+//! masks and the blur background (P8). Keyframed params use their value at
+//! the frame's time.
 
 use opencut_model::{
     Background, CanvasSize, Element, MediaAsset, MediaType, ParamValues, Project, ProjectSettings,
@@ -216,19 +216,19 @@ fn element_layer(element: &Element, assets: &[MediaAsset], time: MediaTime) -> O
         // TODO(P7, P8): text, stickers, graphics and effect layers.
         _ => return None,
     };
+    let params = base.params_at(clip_time);
     #[allow(clippy::cast_possible_truncation)]
-    let opacity = number_param(&base.params, "opacity")
+    let opacity = number_param(&params, "opacity")
         .unwrap_or(1.0)
         .clamp(0.0, 1.0) as f32;
-    let blend_mode = base
-        .params
+    let blend_mode = params
         .get("blendMode")
         .and_then(|value| value.as_str()?.parse().ok())
         .unwrap_or_default();
     Some(SceneLayer {
         id: base.id.clone(),
         source,
-        transform: ElementTransform::from_params(&base.params),
+        transform: ElementTransform::from_params(&params),
         opacity,
         blend_mode,
     })

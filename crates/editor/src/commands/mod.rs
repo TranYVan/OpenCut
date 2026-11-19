@@ -9,6 +9,7 @@ mod media;
 mod properties;
 mod settings;
 mod tracks;
+mod keyframes;
 
 pub use audio::{ToggleElementsMuted, ToggleSourceAudio};
 pub use bookmarks::ToggleBookmark;
@@ -22,3 +23,7 @@ pub use media::{AddMediaAsset, RemoveMediaAssets};
 pub use properties::{SetElementParam, SetElementRetime, ToggleSourceAudioSeparation};
 pub use settings::UpdateProjectSettings;
 pub use tracks::{AddTrack, RemoveTrack, ToggleTrackMute, ToggleTrackVisibility};
+pub use keyframes::{
+    KeyframeClipboardItem, PasteKeyframes, RemoveKeyframe, RetimeKeyframe, SetKeyframeEasing,
+    UpsertKeyframe, copy_keyframes,
+};
