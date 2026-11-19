@@ -44,7 +44,8 @@ impl Shell {
         let workspace = cx.new(|_| Workspace::new());
         let waveform_dir = workspace.read(cx).files().cache_dir().join("waveforms");
         let thumbnails = Arc::new(MediaThumbnails::new(waveform_dir));
-        let browser = cx.new(|cx| Browser::new(workspace.clone(), thumbnails, cx));
+        let browser = cx.new(|cx| Browser::new(workspace.clone(), thumbnails.clone(), cx));
+        let timeline = cx.new(|cx| Timeline::new(workspace.clone(), thumbnails, cx));
         let focus_handle = cx.focus_handle();
         // Actions dispatch from the focused element up, so start focused.
         window.focus(&focus_handle);
@@ -53,7 +54,7 @@ impl Shell {
             browser,
             preview: cx.new(|_| Preview),
             inspector: cx.new(|_| Inspector),
-            timeline: cx.new(|_| Timeline),
+            timeline,
             focus_handle,
         }
     }

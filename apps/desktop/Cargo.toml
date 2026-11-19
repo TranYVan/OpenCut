@@ -16,6 +16,7 @@ gpui = { workspace = true }
 image = "0.25"
 opencut-editor = { workspace = true }
 opencut-media = { workspace = true }
+serde_json = { workspace = true }
 
 # Compile Metal shaders at runtime instead of in gpui's build.rs, so building
 # only needs the Xcode Command Line Tools (no full Xcode / `metal` compiler).
