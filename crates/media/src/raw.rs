@@ -77,6 +77,16 @@ impl CodecContext {
         }
     }
 
+    /// A fresh context for `codec`, to configure and open (encoders).
+    pub(crate) fn alloc(codec: *const ffi::AVCodec) -> Result<Self, MediaError> {
+        // SAFETY: returns a context with defaults for `codec`, or null.
+        let context = unsafe { ffi::avcodec_alloc_context3(codec) };
+        if context.is_null() {
+            return Err(MediaError::ffmpeg("avcodec_alloc_context3", -12));
+        }
+        Ok(Self(context))
+    }
+
     pub(crate) fn as_ptr(&self) -> *const ffi::AVCodecContext {
         self.0
     }

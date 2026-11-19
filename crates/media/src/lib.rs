@@ -7,8 +7,11 @@
 //!   waveform summaries ([`waveform_summary`], [`WaveformCache`]).
 //! - [`video`] decodes frames at a source time, caches them, and makes
 //!   thumbnails, on a worker thread.
+//! - [`Mp4Writer`] encodes RGBA frames (hardware H.264/HEVC first) and
+//!   stereo audio (AAC) into an MP4, for export.
 
 pub mod audio;
+mod encode;
 mod error;
 mod ffi;
 mod format;
@@ -20,6 +23,7 @@ pub use audio::{
     AudioDecoder, AudioFormat, DecodedAudio, WaveformCache, WaveformSummary, decode_audio,
     waveform_summary,
 };
+pub use encode::{EncodeSettings, Mp4Writer, VideoCodec};
 pub use error::MediaError;
 pub use probe::{MediaInfo, probe, probe_asset};
 

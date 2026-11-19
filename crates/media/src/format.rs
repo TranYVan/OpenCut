@@ -130,7 +130,7 @@ impl Drop for Input {
 }
 
 /// FFmpeg takes UTF-8 paths on Windows and raw bytes elsewhere.
-fn path_to_cstring(path: &Path) -> Option<CString> {
+pub(crate) fn path_to_cstring(path: &Path) -> Option<CString> {
     #[cfg(unix)]
     let bytes = {
         use std::os::unix::ffi::OsStrExt;

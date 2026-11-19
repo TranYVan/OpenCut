@@ -1,0 +1,20 @@
+[package]
+name = "opencut-export"
+description = "OpenCut export: renders a project with the compositor, mixes its audio and encodes an MP4"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "opencut_export"
+
+[dependencies]
+opencut-compositor = { workspace = true, features = ["media"] }
+opencut-media = { workspace = true }
+opencut-model = { workspace = true }
+opencut-playback = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+tempfile = "3"

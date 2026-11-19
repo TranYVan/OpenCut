@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::ffi;
 
-/// What went wrong reading a media file.
+/// What went wrong reading or writing a media file.
 #[derive(Debug, thiserror::Error)]
 pub enum MediaError {
     #[error("can't read {path}: {source}")]
@@ -26,6 +26,8 @@ pub enum MediaError {
     },
     #[error("{path} has no audio stream")]
     NoAudioStream { path: PathBuf },
+    #[error("no video encoder could be opened (tried {tried})")]
+    NoVideoEncoder { tried: String },
 }
 
 impl MediaError {

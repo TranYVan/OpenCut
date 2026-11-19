@@ -1,6 +1,6 @@
 [package]
 name = "opencut-media"
-description = "OpenCut media I/O on FFmpeg: probing, and later decoding"
+description = "OpenCut media I/O on FFmpeg: probing, decoding and encoding"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
