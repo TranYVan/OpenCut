@@ -1,5 +1,5 @@
 use opencut_model::time::MediaTime;
-use opencut_model::{ElementKind, ElementRef, TrackKind, ValidationError};
+use opencut_model::{ElementKind, ElementRef, ParamValue, TrackKind, ValidationError};
 
 /// Why a command refused to run. A failed command leaves the project untouched.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -36,6 +36,16 @@ pub enum EditError {
     MediaAssetNotFound(String),
     #[error("a media asset with id {0} already exists")]
     DuplicateMediaAsset(String),
+    #[error("{element:?} elements have no {key} param")]
+    UnknownParam { element: ElementKind, key: String },
+    #[error("{value:?} is not a valid value for {key}")]
+    InvalidParamValue { key: String, value: ParamValue },
+    #[error("{0:?} elements cannot be retimed")]
+    NotRetimable(ElementKind),
+    #[error("the element has no source audio to separate")]
+    NoSourceAudio,
+    #[error("{0:?} elements have no source audio")]
+    NoSourceAudioOn(ElementKind),
     #[error("nothing to do")]
     Empty,
 }

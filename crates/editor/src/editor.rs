@@ -19,6 +19,9 @@ struct HistoryEntry {
     /// selection only for such commands; otherwise selection changes made by
     /// clicking between edits survive the undo.
     selection_after: Option<Selection>,
+    /// Set by [`Editor::execute_coalescing`]: the next command with the same
+    /// key folds into this step instead of adding one.
+    coalesce_key: Option<String>,
 }
 
 /// One open project plus everything needed to edit it: selection, playhead,
@@ -95,6 +98,33 @@ impl Editor {
 
     /// Runs a command as one undo step. On error the project is unchanged.
     pub fn execute(&mut self, command: &mut dyn Command) -> Result<Outcome, EditError> {
+        self.execute_with_key(command, None)
+    }
+
+    /// Like [`Editor::execute`], but folds into the previous undo step when
+    /// that was also run with `key` and nothing else has been run since, so
+    /// a drag of many small edits undoes in one. End the gesture with
+    /// [`Editor::end_coalescing`].
+    pub fn execute_coalescing(
+        &mut self,
+        command: &mut dyn Command,
+        key: &str,
+    ) -> Result<Outcome, EditError> {
+        self.execute_with_key(command, Some(key))
+    }
+
+    /// The next [`Editor::execute_coalescing`] starts a new undo step.
+    pub fn end_coalescing(&mut self) {
+        if let Some(entry) = self.undo_stack.last_mut() {
+            entry.coalesce_key = None;
+        }
+    }
+
+    fn execute_with_key(
+        &mut self,
+        command: &mut dyn Command,
+        key: Option<&str>,
+    ) -> Result<Outcome, EditError> {
         let before = self.project.clone();
         let result = command.apply(&mut self.project).and_then(|outcome| {
             // `tracks()` relies on this.
@@ -121,12 +151,23 @@ impl Editor {
         }
 
         self.after_change();
+        if let Some(key) = key
+            && outcome.selection.is_none()
+            && let Some(entry) = self
+                .undo_stack
+                .last_mut()
+                .filter(|entry| entry.coalesce_key.as_deref() == Some(key))
+        {
+            entry.after = self.project.clone();
+            return Ok(outcome);
+        }
         self.undo_stack.push(HistoryEntry {
             label: command.label(),
             before,
             after: self.project.clone(),
             selection_before,
             selection_after: outcome.selection.is_some().then(|| self.selection.clone()),
+            coalesce_key: key.map(str::to_owned),
         });
         if self.undo_stack.len() > HISTORY_LIMIT {
             self.undo_stack.remove(0);
@@ -163,6 +204,7 @@ impl Editor {
         self.prune_selection();
         self.revision += 1;
         self.redo_stack.push(entry);
+        self.end_coalescing();
         true
     }
 
@@ -178,6 +220,7 @@ impl Editor {
         self.prune_selection();
         self.revision += 1;
         self.undo_stack.push(entry);
+        self.end_coalescing();
         true
     }
 

@@ -62,7 +62,7 @@ impl EditorPanels {
         Self {
             browser: cx.new(|cx| Browser::new(workspace.clone(), thumbnails.clone(), cx)),
             preview: cx.new(|cx| Preview::new(workspace.clone(), cx)),
-            inspector: cx.new(|_| Inspector),
+            inspector: cx.new(|cx| Inspector::new(workspace.clone(), cx)),
             timeline: cx.new(|cx| Timeline::new(workspace.clone(), thumbnails, cx)),
             workspace,
         }
