@@ -86,6 +86,8 @@ impl Render for TextField {
 
         div()
             .id("text-field")
+            // Single-key editor shortcuts stand down while typing.
+            .key_context("TextInput")
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
             .on_click(cx.listener(|this, _, window, _| window.focus(&this.focus_handle)))

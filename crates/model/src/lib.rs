@@ -8,6 +8,7 @@
 
 mod element;
 pub mod migrations;
+mod param_definition;
 mod params;
 mod project;
 mod timestamp;
@@ -17,6 +18,10 @@ pub use element::{
     Animations, AudioElement, AudioSource, Effect, EffectElement, Element, ElementBase,
     ElementKind, GraphicElement, ImageElement, Mask, RetimeConfig, StickerElement, TextElement,
     VideoElement,
+};
+pub use param_definition::{
+    BLEND_MODE_OPTIONS, Dependency, MIN_TRANSFORM_SCALE, ParamDefinition, ParamKind, Unit,
+    VOLUME_DB_MAX, VOLUME_DB_MIN, element_params, find_param, param_value, visible_params,
 };
 pub use params::{ParamValue, ParamValues};
 pub use project::{

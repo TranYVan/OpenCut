@@ -36,6 +36,7 @@ use opencut_editor::model::time::{FrameRate, MediaTime, TimeCodeFormat, format_t
 use opencut_editor::model::{
     Element, ElementKind, ElementRef, MediaAsset, MediaType, RetimeConfig, Track, TrackKind,
 };
+use opencut_editor::snapping::{DEFAULT_SNAP_THRESHOLD_PX, snap_group_shift, snap_threshold};
 use opencut_media::{WaveformCache, WaveformSummary};
 
 use crate::components::{
@@ -48,7 +49,7 @@ use crate::workspace::Workspace;
 
 use layout::{
     HEADER_WIDTH, RULER_HEIGHT, RowLayout, VisibleSpan, auto_scroll_speed, nearest_row,
-    ranges_overlap, row_at, snap_to_edges, source_range, tile_offsets, track_rows, visible_span,
+    ranges_overlap, row_at, source_range, tile_offsets, track_rows, visible_span,
 };
 use ruler::{format_label, ruler_config, ruler_ticks};
 use scale::{
@@ -72,8 +73,6 @@ const TOOLBAR_HEIGHT: f32 = 36.0;
 const DRAG_THRESHOLD: f64 = 3.0;
 /// Width of the grab area at each end of an element for trimming.
 const EDGE_HANDLE: f64 = 6.0;
-/// How close (px) a moved clip's edge must get to a neighbour's to snap to it.
-const EDGE_SNAP: f64 = 8.0;
 /// Auto-scroll tick while a drag rests at an edge (about 60 fps).
 const AUTO_SCROLL_TICK: Duration = Duration::from_millis(16);
 
@@ -314,6 +313,17 @@ impl Timeline {
             self.viewport_width() / 2.0
         };
         self.set_zoom(zoom, anchor, cx);
+    }
+
+    /// Abandons a drag in progress (move, trim or box select) without
+    /// running its command. Returns `false` when there was none.
+    pub(crate) fn cancel_interaction(&mut self, cx: &mut Context<Self>) -> bool {
+        let cancelled = self.drag.take().is_some();
+        if cancelled {
+            self.auto_scroll = None;
+            cx.notify();
+        }
+        cancelled
     }
 
     fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
@@ -593,24 +603,30 @@ impl Timeline {
                 let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
                 let target = tracks.iter().nth(nearest_row(&rows, y)?)?;
                 let selection = editor.selection().elements();
-                let moving = |id: &str| {
-                    anchor.element_id == id || selection.iter().any(|e| e.element_id == id)
-                };
-                let edges = target
-                    .elements
-                    .iter()
-                    .filter(|element| !moving(element.id()))
-                    .flat_map(|element| [element.start_time(), element.end_time()]);
                 let anchor_element = tracks.element(anchor)?;
-                let tolerance =
-                    MediaTime::from_seconds_f64(EDGE_SNAP / pixels_per_second(self.zoom))
-                        .unwrap_or(MediaTime::ZERO);
-                let start = snap_to_edges(
-                    start,
-                    anchor_element.end_time() - anchor_element.start_time(),
-                    edges,
-                    tolerance,
-                );
+                let start = if editor.snapping_enabled {
+                    let mut moving: Vec<&ElementRef> = vec![anchor];
+                    moving.extend(
+                        selection
+                            .iter()
+                            .filter(|e| e.element_id != anchor.element_id),
+                    );
+                    let spans: Vec<_> = moving
+                        .iter()
+                        .filter_map(|member| tracks.element(member))
+                        .map(|member| {
+                            let at = member.start_time() - anchor_element.start_time() + start;
+                            (at, at + member.end_time() - member.start_time())
+                        })
+                        .collect();
+                    let ids: Vec<&str> = moving.iter().map(|m| m.element_id.as_str()).collect();
+                    let threshold =
+                        snap_threshold(DEFAULT_SNAP_THRESHOLD_PX, pixels_per_second(self.zoom));
+                    snap_group_shift(&spans, &editor.snap_points(&ids), threshold)
+                        .map_or(start, |(shift, _)| start + shift)
+                } else {
+                    start
+                };
                 MoveElements::drag(tracks, selection, anchor, &target.id, start).map(Planned::Move)
             }
             DragKind::Trim { element, edge } => {

@@ -13,6 +13,10 @@ use opencut_project_store::{ProjectStore, StoreError};
 
 use crate::media::{ProjectFiles, import_file, import_image_bytes, paths_in_text};
 
+mod playback;
+
+pub(crate) use playback::Transport;
+
 /// How long the project must sit unchanged before it's autosaved
 /// (classic `SaveManager`'s 800 ms).
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -39,6 +43,8 @@ pub(crate) struct Workspace {
     notice: Option<SharedString>,
     /// Clears `notice`; replacing it cancels the previous one.
     notice_timer: Option<Task<()>>,
+    /// Audio output, clock and frame scheduling while playing.
+    engine: playback::Engine,
 }
 
 /// Whatever drops the project (closing it, closing the window) saves it
@@ -86,6 +92,7 @@ impl Workspace {
             importing: 0,
             notice: None,
             notice_timer: None,
+            engine: playback::Engine::default(),
         })
     }
 
@@ -141,9 +148,17 @@ impl Workspace {
     pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
         let before = self.editor.playback().position;
         self.editor.seek(time);
+        self.position_moved(before, cx);
+    }
+
+    /// After a seek: saves the playhead, re-syncs audio if playing, redraws.
+    fn position_moved(&mut self, before: MediaTime, cx: &mut Context<Self>) {
         if self.editor.playback().position != before {
             self.autosave.view_changed = true;
             self.schedule_save(cx);
+            if self.editor.playback().playing {
+                self.start_session(cx);
+            }
             cx.notify();
         }
     }
@@ -263,6 +278,18 @@ impl Workspace {
         }
     }
 
+    /// Selects every timeline element. Not undoable.
+    pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.editor.select_all();
+        cx.notify();
+    }
+
+    /// Copies the selected elements to the editor's clipboard (not the
+    /// system's). Returns `false` when nothing is selected.
+    pub(crate) fn copy_selection(&mut self) -> bool {
+        self.editor.copy_selection()
+    }
+
     pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
         if self.editor.undo() {
             self.changed(cx);
@@ -316,6 +343,24 @@ impl Workspace {
         self.changed(cx);
     }
 
+    /// Like [`Workspace::execute`], but repeated calls with the same `key`
+    /// (a drag) fold into one undo step until [`Workspace::end_coalescing`].
+    pub(crate) fn execute_coalescing(
+        &mut self,
+        command: &mut dyn Command,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.editor.execute_coalescing(command, key) {
+            self.set_notice(format!("{}: {error}", command.label()), cx);
+        }
+        self.changed(cx);
+    }
+
+    pub(crate) fn end_coalescing(&mut self) {
+        self.editor.end_coalescing();
+    }
+
     fn set_notice(&mut self, message: String, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
         self.notice_timer = Some(cx.spawn(async move |this, cx| {
@@ -332,6 +377,10 @@ impl Workspace {
     fn changed(&mut self, cx: &mut Context<Self>) {
         if self.editor.revision() != self.autosave.saved_revision {
             self.schedule_save(cx);
+        }
+        // An edit while playing: remix from the playhead.
+        if self.editor.playback().playing {
+            self.start_session(cx);
         }
         cx.notify();
     }

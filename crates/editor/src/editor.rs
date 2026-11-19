@@ -3,8 +3,10 @@ use opencut_model::time::MediaTime;
 use opencut_model::{Project, SceneTracks, TimelineViewState, ValidationError};
 
 use crate::command::{Command, Outcome};
+use crate::commands::Clipboard;
 use crate::error::EditError;
 use crate::playback::Playback;
+use crate::ripple::{apply_ripple_adjustments, compute_ripple_adjustments};
 use crate::selection::Selection;
 
 /// Undo steps kept before the oldest is dropped.
@@ -19,6 +21,9 @@ struct HistoryEntry {
     /// selection only for such commands; otherwise selection changes made by
     /// clicking between edits survive the undo.
     selection_after: Option<Selection>,
+    /// Set by [`Editor::execute_coalescing`]: the next command with the same
+    /// key folds into this step instead of adding one.
+    coalesce_key: Option<String>,
 }
 
 /// One open project plus everything needed to edit it: selection, playhead,
@@ -30,6 +35,8 @@ pub struct Editor {
     playback: Playback,
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
+    /// Copied elements. Outside the undo history, see [`Clipboard`].
+    pub(crate) clipboard: Clipboard,
     revision: u64,
     pub snapping_enabled: bool,
     pub ripple_enabled: bool,
@@ -48,6 +55,7 @@ impl Editor {
             playback: Playback::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            clipboard: Clipboard::default(),
             revision: 0,
             snapping_enabled: true,
             ripple_enabled: false,
@@ -95,11 +103,42 @@ impl Editor {
 
     /// Runs a command as one undo step. On error the project is unchanged.
     pub fn execute(&mut self, command: &mut dyn Command) -> Result<Outcome, EditError> {
+        self.execute_with_key(command, None)
+    }
+
+    /// Like [`Editor::execute`], but folds into the previous undo step when
+    /// that was also run with `key` and nothing else has been run since, so
+    /// a drag of many small edits undoes in one. End the gesture with
+    /// [`Editor::end_coalescing`].
+    pub fn execute_coalescing(
+        &mut self,
+        command: &mut dyn Command,
+        key: &str,
+    ) -> Result<Outcome, EditError> {
+        self.execute_with_key(command, Some(key))
+    }
+
+    /// The next [`Editor::execute_coalescing`] starts a new undo step.
+    pub fn end_coalescing(&mut self) {
+        if let Some(entry) = self.undo_stack.last_mut() {
+            entry.coalesce_key = None;
+        }
+    }
+
+    fn execute_with_key(
+        &mut self,
+        command: &mut dyn Command,
+        key: Option<&str>,
+    ) -> Result<Outcome, EditError> {
         let before = self.project.clone();
+        let tracks_before = self.ripple_enabled.then(|| self.tracks().clone());
         let result = command.apply(&mut self.project).and_then(|outcome| {
             // `tracks()` relies on this.
             if self.project.current_scene().is_none() {
                 return Err(EditError::NoCurrentScene);
+            }
+            if let Some(tracks_before) = &tracks_before {
+                self.ripple(tracks_before);
             }
             Ok(outcome)
         });
@@ -121,12 +160,23 @@ impl Editor {
         }
 
         self.after_change();
+        if let Some(key) = key
+            && outcome.selection.is_none()
+            && let Some(entry) = self
+                .undo_stack
+                .last_mut()
+                .filter(|entry| entry.coalesce_key.as_deref() == Some(key))
+        {
+            entry.after = self.project.clone();
+            return Ok(outcome);
+        }
         self.undo_stack.push(HistoryEntry {
             label: command.label(),
             before,
             after: self.project.clone(),
             selection_before,
             selection_after: outcome.selection.is_some().then(|| self.selection.clone()),
+            coalesce_key: key.map(str::to_owned),
         });
         if self.undo_stack.len() > HISTORY_LIMIT {
             self.undo_stack.remove(0);
@@ -163,6 +213,7 @@ impl Editor {
         self.prune_selection();
         self.revision += 1;
         self.redo_stack.push(entry);
+        self.end_coalescing();
         true
     }
 
@@ -178,6 +229,7 @@ impl Editor {
         self.prune_selection();
         self.revision += 1;
         self.undo_stack.push(entry);
+        self.end_coalescing();
         true
     }
 
@@ -255,12 +307,56 @@ impl Editor {
         self.seek(self.duration());
     }
 
-    pub fn set_playing(&mut self, playing: bool) {
-        self.playback.playing = playing;
+    /// Moves the playhead by `delta` (negative goes back), snapped to a frame
+    /// and clamped to the scene. Classic `seek-forward` and `jump-*`.
+    pub fn seek_by(&mut self, delta: MediaTime) {
+        self.seek(self.playback.position + delta);
+    }
+
+    /// Starts playing, from the start when the playhead is at the end.
+    /// Does nothing on an empty scene.
+    pub fn play(&mut self) {
+        let duration = self.duration();
+        if duration <= MediaTime::ZERO {
+            return;
+        }
+        if self.playback.position >= duration {
+            self.go_to_start();
+        }
+        self.playback.playing = true;
+    }
+
+    pub fn pause(&mut self) {
+        self.playback.playing = false;
+    }
+
+    /// Classic `stop-playback`: pause and return to the start.
+    pub fn stop(&mut self) {
+        self.pause();
+        self.go_to_start();
     }
 
     pub fn toggle_playing(&mut self) {
-        self.playback.playing = !self.playback.playing;
+        if self.playback.playing {
+            self.pause();
+        } else {
+            self.play();
+        }
+    }
+
+    /// Moves the playhead to where the playback clock says it is: the frame
+    /// being shown (floored, never ahead of the audio). Pauses at the end of
+    /// the scene. Returns whether playback is still running.
+    pub fn advance_to(&mut self, time: MediaTime) -> bool {
+        let rate = self.project.settings.fps;
+        let duration = self.duration();
+        if time >= duration {
+            self.playback.position = duration;
+            self.playback.playing = false;
+        } else if let Some(frame) = time.floor_to_frame(rate) {
+            self.playback.position = frame.max(MediaTime::ZERO);
+        }
+        self.playback.playing
     }
 
     /// Swaps in a history snapshot, keeping the current timeline view: it
@@ -268,6 +364,14 @@ impl Editor {
     fn restore(&mut self, mut project: Project) {
         project.timeline_view_state = self.project.timeline_view_state.take();
         self.project = project;
+    }
+
+    /// Closes the gaps a command left in the current scene (classic ripple).
+    fn ripple(&mut self, before: &SceneTracks) {
+        if let Some(scene) = self.project.current_scene_mut() {
+            let adjustments = compute_ripple_adjustments(before, &scene.tracks);
+            apply_ripple_adjustments(&mut scene.tracks, &adjustments);
+        }
     }
 
     fn prune_selection(&mut self) {
