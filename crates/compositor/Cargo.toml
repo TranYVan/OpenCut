@@ -1,0 +1,29 @@
+[package]
+name = "opencut-compositor"
+description = "OpenCut compositor: project + time to layers, composited on the GPU into an RGBA frame"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "opencut_compositor"
+
+[features]
+default = []
+# `MediaSources`: decodes video and image frames with opencut-media (FFmpeg).
+media = ["dep:opencut-media"]
+
+[dependencies]
+bytemuck = { workspace = true }
+opencut-gpu = { workspace = true }
+opencut-media = { workspace = true, optional = true }
+opencut-model = { workspace = true }
+opencut-time = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+png = "0.18"
+pretty_assertions = "1"
+serde_json = { workspace = true }
