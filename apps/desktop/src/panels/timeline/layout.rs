@@ -3,6 +3,7 @@
 //! `timeline/components/layout.ts` (tag `pre-rewrite`).
 
 use opencut_editor::model::TrackKind;
+use opencut_editor::model::time::MediaTime;
 
 /// Height of the ruler strip above the tracks.
 pub(crate) const RULER_HEIGHT: f64 = 24.0;
@@ -168,6 +169,24 @@ pub(crate) fn source_range(
     (trim_start + from * rate, trim_start + to * rate)
 }
 
+/// Shifts `start` so the span's start or end lands on the nearest edge within
+/// `tolerance`. Clip ends are rarely on a frame, so frame rounding alone
+/// never lets two clips touch.
+pub(crate) fn snap_to_edges(
+    start: MediaTime,
+    duration: MediaTime,
+    edges: impl IntoIterator<Item = MediaTime>,
+    tolerance: MediaTime,
+) -> MediaTime {
+    let abs = |time: MediaTime| time.max(-time);
+    edges
+        .into_iter()
+        .flat_map(|edge| [edge - start, edge - (start + duration)])
+        .filter(|shift| abs(*shift) <= tolerance)
+        .min_by_key(|shift| abs(*shift))
+        .map_or(start, |shift| start + shift)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,5 +304,23 @@ mod tests {
         assert_eq!(auto_scroll_speed(-100.0, 1000.0), -AUTO_SCROLL_MAX);
         assert_eq!(auto_scroll_speed(2000.0, 1000.0), AUTO_SCROLL_MAX);
         assert_eq!(auto_scroll_speed(0.0, 50.0), 0.0);
+    }
+
+    #[test]
+    fn snaps_to_the_nearest_edge_within_tolerance() {
+        let t = |s: f64| MediaTime::from_seconds_f64(s).unwrap();
+        // Neighbour ends off-frame at 10.013 s; a drop at 10.0 s snaps to it.
+        assert_eq!(
+            snap_to_edges(t(10.0), t(2.0), [t(10.013)], t(0.1)),
+            t(10.013)
+        );
+        // The end snaps too: 2 s clip ending at 4.95 touches a clip at 5.0.
+        assert_eq!(snap_to_edges(t(2.95), t(2.0), [t(5.0)], t(0.1)), t(3.0));
+        // Nearest wins; out of tolerance leaves the start alone.
+        assert_eq!(
+            snap_to_edges(t(1.0), t(1.0), [t(1.05), t(0.98)], t(0.1)),
+            t(0.98)
+        );
+        assert_eq!(snap_to_edges(t(1.0), t(1.0), [t(3.0)], t(0.1)), t(1.0));
     }
 }

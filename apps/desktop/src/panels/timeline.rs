@@ -48,7 +48,7 @@ use crate::workspace::Workspace;
 
 use layout::{
     HEADER_WIDTH, RULER_HEIGHT, RowLayout, VisibleSpan, auto_scroll_speed, nearest_row,
-    ranges_overlap, row_at, source_range, tile_offsets, track_rows, visible_span,
+    ranges_overlap, row_at, snap_to_edges, source_range, tile_offsets, track_rows, visible_span,
 };
 use ruler::{format_label, ruler_config, ruler_ticks};
 use scale::{
@@ -72,6 +72,8 @@ const TOOLBAR_HEIGHT: f32 = 36.0;
 const DRAG_THRESHOLD: f64 = 3.0;
 /// Width of the grab area at each end of an element for trimming.
 const EDGE_HANDLE: f64 = 6.0;
+/// How close (px) a moved clip's edge must get to a neighbour's to snap to it.
+const EDGE_SNAP: f64 = 8.0;
 /// Auto-scroll tick while a drag rests at an edge (about 60 fps).
 const AUTO_SCROLL_TICK: Duration = Duration::from_millis(16);
 
@@ -591,6 +593,24 @@ impl Timeline {
                 let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
                 let target = tracks.iter().nth(nearest_row(&rows, y)?)?;
                 let selection = editor.selection().elements();
+                let moving = |id: &str| {
+                    anchor.element_id == id || selection.iter().any(|e| e.element_id == id)
+                };
+                let edges = target
+                    .elements
+                    .iter()
+                    .filter(|element| !moving(element.id()))
+                    .flat_map(|element| [element.start_time(), element.end_time()]);
+                let anchor_element = tracks.element(anchor)?;
+                let tolerance =
+                    MediaTime::from_seconds_f64(EDGE_SNAP / pixels_per_second(self.zoom))
+                        .unwrap_or(MediaTime::ZERO);
+                let start = snap_to_edges(
+                    start,
+                    anchor_element.end_time() - anchor_element.start_time(),
+                    edges,
+                    tolerance,
+                );
                 MoveElements::drag(tracks, selection, anchor, &target.id, start).map(Planned::Move)
             }
             DragKind::Trim { element, edge } => {
