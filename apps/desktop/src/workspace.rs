@@ -290,6 +290,14 @@ impl Workspace {
         self.editor.copy_selection()
     }
 
+    /// Edits another scene. Not undoable, as in classic.
+    pub(crate) fn switch_scene(&mut self, scene_id: &str, cx: &mut Context<Self>) {
+        if let Err(error) = self.editor.switch_scene(scene_id) {
+            self.set_notice(format!("Switch scene: {error}"), cx);
+        }
+        self.changed(cx);
+    }
+
     pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
         if self.editor.undo() {
             self.changed(cx);

@@ -29,12 +29,14 @@ use gpui::{
 };
 use opencut_editor::Command;
 use opencut_editor::commands::{
-    DeleteElements, DuplicateElements, Edge, InsertElement, MoveElements, Placement,
-    SetElementTiming, SplitElements, ToggleTrackMute, ToggleTrackVisibility,
+    DeleteElements, DuplicateElements, Edge, InsertElement, MoveBookmark, MoveElements, Placement,
+    SetElementTiming, SplitElements, ToggleBookmark, ToggleTrackMute, ToggleTrackVisibility,
+    UpdateBookmark,
 };
 use opencut_editor::model::time::{FrameRate, MediaTime, TimeCodeFormat, format_timecode};
 use opencut_editor::model::{
-    Element, ElementKind, ElementRef, MediaAsset, MediaType, RetimeConfig, Track, TrackKind,
+    Bookmark, Element, ElementKind, ElementRef, MediaAsset, MediaType, RetimeConfig, Track,
+    TrackKind,
 };
 use opencut_editor::snapping::{DEFAULT_SNAP_THRESHOLD_PX, snap_group_shift, snap_threshold};
 use opencut_media::{WaveformCache, WaveformSummary};
@@ -141,6 +143,9 @@ pub(crate) struct Timeline {
     /// Scrolls while a drag rests at an edge; dropping it stops.
     auto_scroll: Option<Task<()>>,
     context_menu: Entity<ContextMenu>,
+    bookmark_menu: Entity<ContextMenu>,
+    /// The bookmark `bookmark_menu` was opened on.
+    menu_bookmark: Option<MediaTime>,
     /// What the panel last drew, to re-render only when it changes.
     seen_project: Option<String>,
     seen_revision: u64,
@@ -170,6 +175,46 @@ impl Timeline {
                 item("Delete", Self::delete_selection).variant(ContextMenuItemVariant::Destructive),
             ])
         });
+        let bookmark_item = |label: &'static str, make: BookmarkEdit| {
+            let this = weak.clone();
+            ContextMenuItem::entry(label).on_select(move |_, cx| {
+                let _ = this.update(cx, |this, cx| this.edit_bookmark(make, cx));
+            })
+        };
+        // Bookmark colours are document data (classic stores hex), not theme.
+        let bookmark_menu = cx.new(|_| {
+            ContextMenu::new([
+                bookmark_item("Move to playhead", |bookmark, playhead| {
+                    Box::new(MoveBookmark {
+                        from: bookmark.time,
+                        to: playhead,
+                    })
+                }),
+                bookmark_item("Extend to playhead", |bookmark, playhead| {
+                    Box::new(UpdateBookmark {
+                        duration: (playhead > bookmark.time).then(|| playhead - bookmark.time),
+                        ..update_bookmark(bookmark)
+                    })
+                }),
+                ContextMenuItem::separator(),
+                bookmark_item("Red", |bookmark, _| recolor(bookmark, "#ef4444")),
+                bookmark_item("Green", |bookmark, _| recolor(bookmark, "#22c55e")),
+                bookmark_item("Blue", |bookmark, _| recolor(bookmark, "#3b82f6")),
+                bookmark_item("Default colour", |bookmark, _| {
+                    Box::new(UpdateBookmark {
+                        color: None,
+                        ..update_bookmark(bookmark)
+                    })
+                }),
+                ContextMenuItem::separator(),
+                bookmark_item("Remove", |bookmark, _| {
+                    Box::new(ToggleBookmark {
+                        time: bookmark.time,
+                    })
+                })
+                .variant(ContextMenuItemVariant::Destructive),
+            ])
+        });
         let mut this = Self {
             workspace,
             thumbnail_provider,
@@ -182,6 +227,8 @@ impl Timeline {
             drag: None,
             auto_scroll: None,
             context_menu,
+            bookmark_menu,
+            menu_bookmark: None,
             seen_project: None,
             seen_revision: 0,
             seen_position: MediaTime::ZERO,
@@ -405,6 +452,24 @@ impl Timeline {
     fn execute(&self, command: &mut dyn Command, cx: &mut Context<Self>) {
         self.workspace
             .update(cx, |workspace, cx| workspace.execute(command, cx));
+    }
+
+    /// Runs the edit `make` builds for the bookmark the menu was opened on.
+    fn edit_bookmark(&mut self, make: BookmarkEdit, cx: &mut Context<Self>) {
+        let Some(time) = self.menu_bookmark.take() else {
+            return;
+        };
+        let editor = self.workspace.read(cx).editor();
+        let Some(bookmark) = editor.project().current_scene().and_then(|scene| {
+            scene
+                .bookmarks
+                .iter()
+                .find(|bookmark| bookmark.time == time)
+        }) else {
+            return;
+        };
+        let mut command = make(bookmark, editor.playback().position);
+        self.execute(command.as_mut(), cx);
     }
 
     fn start_drag(&mut self, kind: DragKind, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -879,15 +944,27 @@ impl Timeline {
                     .as_deref()
                     .and_then(parse_hex_color)
                     .unwrap_or(colors.chart_4);
+                let time = bookmark.time;
+                // A taller hit area than the 4px marker, for right-clicking.
                 Some(
                     div()
+                        .id(("bookmark", time.as_ticks().unsigned_abs()))
                         .absolute()
                         .top(px(0.0))
                         .left(f(span.left))
                         .w(f(span.width))
-                        .h(px(4.0))
-                        .rounded_b(px(2.0))
-                        .bg(color)
+                        .h(px(10.0))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                                window.prevent_default();
+                                cx.stop_propagation();
+                                this.menu_bookmark = Some(time);
+                                this.bookmark_menu
+                                    .update(cx, |menu, cx| menu.open(event.position, cx));
+                            }),
+                        )
+                        .child(div().h(px(4.0)).rounded_b(px(2.0)).bg(color))
                         .into_any_element(),
                 )
             })
@@ -1415,7 +1492,28 @@ impl Render for Timeline {
                     .child(timeline_column),
             )
             .child(self.context_menu.clone())
+            .child(self.bookmark_menu.clone())
     }
+}
+
+/// Builds a bookmark edit from the bookmark and the playhead.
+type BookmarkEdit = fn(&Bookmark, MediaTime) -> Box<dyn Command>;
+
+/// An edit that leaves `bookmark` as it is, to override fields of.
+fn update_bookmark(bookmark: &Bookmark) -> UpdateBookmark {
+    UpdateBookmark {
+        time: bookmark.time,
+        note: bookmark.note.clone(),
+        color: bookmark.color.clone(),
+        duration: bookmark.duration,
+    }
+}
+
+fn recolor(bookmark: &Bookmark, color: &str) -> Box<dyn Command> {
+    Box::new(UpdateBookmark {
+        color: Some(color.to_owned()),
+        ..update_bookmark(bookmark)
+    })
 }
 
 /// Loads what an element of `asset` draws. Blocking; runs on the

@@ -1,0 +1,98 @@
+{
+  "metadata": {
+    "id": "5b7e1f0a-3c2d-4e6f-8a9b-0c1d2e3f4a5b",
+    "name": "Two scenes",
+    "duration": 240000,
+    "createdAt": "2026-05-02T09:15:00.000Z",
+    "updatedAt": "2026-05-10T18:42:31.123Z"
+  },
+  "scenes": [
+    {
+      "id": "scene-main",
+      "name": "Main scene",
+      "isMain": true,
+      "bookmarks": [
+        { "time": 120000, "note": "beat", "color": "#ff0000" }
+      ],
+      "createdAt": "2026-05-02T09:15:00.000Z",
+      "updatedAt": "2026-05-10T18:42:31.123Z",
+      "tracks": {
+        "overlay": [],
+        "main": {
+          "id": "track-main",
+          "name": "Main Track",
+          "type": "video",
+          "muted": false,
+          "hidden": false,
+          "elements": [
+            {
+              "id": "el-photo",
+              "type": "image",
+              "name": "sunset.jpg",
+              "mediaId": "media-sunset",
+              "startTime": 0,
+              "duration": 240000,
+              "trimStart": 0,
+              "trimEnd": 0,
+              "params": {}
+            }
+          ]
+        },
+        "audio": []
+      }
+    },
+    {
+      "id": "scene-intro",
+      "name": "Intro",
+      "isMain": false,
+      "bookmarks": [
+        { "time": 0 },
+        { "time": 40000, "duration": 20000 }
+      ],
+      "createdAt": "2026-05-03T10:00:00.000Z",
+      "updatedAt": "2026-05-04T11:30:00.500Z",
+      "tracks": {
+        "overlay": [
+          {
+            "id": "track-text",
+            "name": "Text track",
+            "type": "text",
+            "hidden": false,
+            "elements": [
+              {
+                "id": "el-title",
+                "type": "text",
+                "name": "Title",
+                "startTime": 0,
+                "duration": 120000,
+                "trimStart": 0,
+                "trimEnd": 0,
+                "params": { "content": "Hello", "fontSize": 64, "color": "#ffffff" }
+              }
+            ]
+          }
+        ],
+        "main": {
+          "id": "track-main-intro",
+          "name": "Main Track",
+          "type": "video",
+          "muted": false,
+          "hidden": false,
+          "elements": []
+        },
+        "audio": []
+      }
+    }
+  ],
+  "currentSceneId": "scene-intro",
+  "settings": {
+    "fps": { "numerator": 30, "denominator": 1 },
+    "canvasSize": { "width": 1920, "height": 1080 },
+    "canvasSizeMode": "preset",
+    "lastCustomCanvasSize": null,
+    "originalCanvasSize": null,
+    "background": { "type": "color", "color": "#000000" }
+  },
+  "version": 31,
+  "timelineViewState": { "zoomLevel": 1, "scrollLeft": 0, "playheadTime": 0 }
+}

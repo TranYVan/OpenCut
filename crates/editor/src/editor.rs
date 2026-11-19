@@ -273,6 +273,23 @@ impl Editor {
         self.redo_stack.clear();
     }
 
+    /// Makes `scene_id` the scene being edited and clears the selection.
+    /// Like classic `switchToScene` (and the timeline view) it's not an
+    /// edit: no undo step, and undo/redo keep the scene you're on. The
+    /// playhead stays where it is. Bumps the revision so the switch is saved.
+    pub fn switch_scene(&mut self, scene_id: &str) -> Result<(), EditError> {
+        if self.project.scene(scene_id).is_none() {
+            return Err(EditError::SceneNotFound(scene_id.to_owned()));
+        }
+        if self.project.current_scene_id != scene_id {
+            self.project.current_scene_id = scene_id.to_owned();
+            self.project.metadata.updated_at = Utc::now().trunc_subsecs(3);
+            self.selection.clear();
+            self.revision += 1;
+        }
+        Ok(())
+    }
+
     /// Length of the current scene.
     pub fn duration(&self) -> MediaTime {
         self.tracks().duration()
@@ -359,10 +376,14 @@ impl Editor {
         self.playback.playing
     }
 
-    /// Swaps in a history snapshot, keeping the current timeline view: it
-    /// isn't part of the edit history.
+    /// Swaps in a history snapshot, keeping the current timeline view and,
+    /// while the snapshot still has it, the current scene: neither is part
+    /// of the edit history.
     fn restore(&mut self, mut project: Project) {
         project.timeline_view_state = self.project.timeline_view_state.take();
+        if project.scene(&self.project.current_scene_id).is_some() {
+            project.current_scene_id = std::mem::take(&mut self.project.current_scene_id);
+        }
         self.project = project;
     }
 
