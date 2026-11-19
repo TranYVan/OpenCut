@@ -28,6 +28,8 @@ pub const AVERROR_EOF: i32 = fferrtag(b"EOF ");
 pub const AVERROR_INVALIDDATA: i32 = fferrtag(b"INDA");
 /// `AVERROR_DECODER_NOT_FOUND`.
 pub const AVERROR_DECODER_NOT_FOUND: i32 = fferrtag(&[0xF8, b'D', b'E', b'C']);
+/// `AVERROR_ENCODER_NOT_FOUND`.
+pub const AVERROR_ENCODER_NOT_FOUND: i32 = fferrtag(&[0xF8, b'E', b'N', b'C']);
 
 /// The C library's `EAGAIN`, which FFmpeg returns negated.
 #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -4104,6 +4104,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "opencut-export"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "opencut-compositor",
+ "opencut-media",
+ "opencut-model",
+ "opencut-playback",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "opencut-gpu"
 version = "0.1.0"
 dependencies = [

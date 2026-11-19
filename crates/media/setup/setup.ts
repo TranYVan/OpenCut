@@ -121,6 +121,9 @@ function configureFlags(target: Platform, host: Platform): string[] {
       // Found through the app's rpath: beside it in development, in the
       // bundle's Frameworks when shipped.
       flags.push("--install-name-dir=@rpath", `--extra-cflags=${machine}`, `--extra-ldflags=${machine}`);
+      // The hardware H.264/HEVC encoders export uses; --disable-autodetect
+      // leaves them out otherwise.
+      flags.push("--enable-videotoolbox");
       if (cross) flags.push("--enable-cross-compile", "--target-os=darwin", `--arch=${target.arch}`);
       break;
     }

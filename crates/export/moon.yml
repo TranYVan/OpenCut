@@ -1,0 +1,28 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+layer: 'library'
+
+fileGroups:
+  sources:
+    - 'src/**/*'
+    - 'tests/**/*'
+    - 'build.rs'
+    - 'Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+
+tasks:
+  check:
+    command: 'cargo check -p opencut-export --all-targets'
+    deps: ['media:setup']
+    inputs:
+      - '@group(sources)'
+
+  # The export test skips with a message when there is no GPU adapter, as
+  # the compositor's do.
+  test:
+    command: 'cargo test -p opencut-export'
+    deps: ['media:setup']
+    inputs:
+      - '@group(sources)'
