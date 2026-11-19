@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use gpui::{ClipboardEntry, ClipboardItem, Context, ImageFormat, PathPromptOptions, SharedString};
 use opencut_editor::commands::{AddMediaAsset, RemoveMediaAssets};
+use opencut_editor::model::time::MediaTime;
 use opencut_editor::model::{MediaAsset, Project};
 use opencut_editor::{Batch, Command, Editor};
 
@@ -21,7 +22,8 @@ pub(crate) struct Workspace {
 
 impl Workspace {
     pub(crate) fn new() -> Self {
-        let project = Project::new("Untitled project", chrono::Utc::now());
+        let project =
+            debug_project().unwrap_or_else(|| Project::new("Untitled project", chrono::Utc::now()));
         let files = ProjectFiles::for_project(&project.metadata.id);
         Self {
             editor: Editor::new(project).expect("a new project is valid"),
@@ -187,7 +189,17 @@ impl Workspace {
         cx.notify();
     }
 
-    fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
+    /// Moves the playhead (snapped to a frame, clamped to the scene). Not
+    /// an edit, so not undoable.
+    pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
+        let before = self.editor.playback().position;
+        self.editor.seek(time);
+        if self.editor.playback().position != before {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
         if let Err(error) = self.editor.execute(command) {
             self.notice = Some(format!("{}: {error}", command.label()).into());
         }
@@ -198,6 +210,23 @@ impl Workspace {
         self.notice = Some(message.into());
         cx.notify();
     }
+}
+
+/// Debug builds open the project JSON at `$OPENCUT_DEBUG_PROJECT` (e.g. the
+/// classic fixture in `crates/model/tests/fixtures`) instead of a new one,
+/// until projects can be opened from the UI.
+#[cfg(debug_assertions)]
+fn debug_project() -> Option<Project> {
+    let path = std::env::var_os("OPENCUT_DEBUG_PROJECT")?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let project: Project = serde_json::from_str(&text).ok()?;
+    project.validate().ok()?;
+    Some(project)
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_project() -> Option<Project> {
+    None
 }
 
 fn image_extension(format: ImageFormat) -> &'static str {

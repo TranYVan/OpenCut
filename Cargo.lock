@@ -3644,6 +3644,7 @@ dependencies = [
  "image",
  "opencut-editor",
  "opencut-media",
+ "serde_json",
 ]
 
 [[package]]
