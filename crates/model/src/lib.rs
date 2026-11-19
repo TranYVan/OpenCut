@@ -7,6 +7,7 @@
 //! lives in `opencut-editor`.
 
 mod element;
+pub mod migrations;
 mod params;
 mod project;
 mod timestamp;

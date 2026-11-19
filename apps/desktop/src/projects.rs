@@ -6,7 +6,8 @@
 use chrono::{DateTime, Local, Utc};
 use gpui::{
     AnyElement, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable, MouseButton,
-    MouseDownEvent, Pixels, Point, SharedString, Subscription, Window, div, prelude::*, px,
+    MouseDownEvent, PathPromptOptions, Pixels, Point, SharedString, Subscription, Window, div,
+    prelude::*, px,
 };
 use opencut_editor::model::time::MediaTime;
 use opencut_editor::model::{Project, ProjectMetadata};
@@ -160,6 +161,41 @@ impl ProjectsView {
             move || store.create(DEFAULT_PROJECT_NAME, Utc::now()),
             "Can't create a project",
         );
+    }
+
+    /// Asks for a classic export zip, imports it as a new project and opens it.
+    fn import_classic(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let picked = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Import".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let path = match picked.await {
+                Ok(Ok(Some(mut paths))) if !paths.is_empty() => paths.swap_remove(0),
+                Ok(Err(error)) => {
+                    let _ = this.update(cx, |this, cx| {
+                        this.notice = Some(format!("Can't open the file picker: {error}").into());
+                        cx.notify();
+                    });
+                    return;
+                }
+                _ => return,
+            };
+            let _ = this.update(cx, |this, cx| {
+                let store = this.store.clone();
+                this.load_then_open(
+                    cx,
+                    move || store.import_classic_zip(&path, Utc::now()),
+                    "Can't import the project",
+                );
+            });
+        })
+        .detach();
     }
 
     fn open(&mut self, id: String, cx: &mut Context<Self>) {
@@ -329,6 +365,12 @@ impl ProjectsView {
                     .on_click(move |_, _, cx| {
                         let _ = view.update(cx, |this, cx| this.set_sort(key, order.toggled(), cx));
                     }),
+            )
+            .child(
+                Button::new("import-project", "Import…")
+                    .variant(ButtonVariant::Outline)
+                    .disabled(self.busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.import_classic(cx))),
             )
             .child(
                 Button::new("new-project", "New project")
@@ -513,11 +555,21 @@ impl Render for ProjectsView {
                 .child(div().text_base().child("No projects yet"))
                 .child(Label::new("Start a new project to begin editing.").muted())
                 .child(
-                    div().pt(px(8.0)).child(
-                        Button::new("empty-new-project", "New project")
-                            .disabled(self.busy)
-                            .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
-                    ),
+                    div()
+                        .flex()
+                        .gap(px(8.0))
+                        .pt(px(8.0))
+                        .child(
+                            Button::new("empty-import-project", "Import classic project…")
+                                .variant(ButtonVariant::Outline)
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.import_classic(cx))),
+                        )
+                        .child(
+                            Button::new("empty-new-project", "New project")
+                                .disabled(self.busy)
+                                .on_click(cx.listener(|this, _, _, cx| this.create(cx))),
+                        ),
                 )
                 .into_any_element()
         } else {

@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opencut_editor::model::{MediaAsset, new_id};
-use opencut_project_store::{CACHE_DIR, MEDIA_DIR};
+use opencut_project_store::{CACHE_DIR, MEDIA_DIR, media_file_name};
 
 /// Where a project's files live on disk: the project's folder in the
 /// [`ProjectStore`](opencut_project_store::ProjectStore), with imported
@@ -32,27 +32,8 @@ impl ProjectFiles {
     /// The project's copy of an asset's file: `media/<asset id>.<ext>`,
     /// with the extension of the original file name.
     pub(crate) fn media_path(&self, asset: &MediaAsset) -> PathBuf {
-        self.media_dir().join(file_name_for(
-            &asset.id,
-            extension_of(&asset.name).as_deref(),
-        ))
-    }
-}
-
-/// A file's extension, lowercased; `None` unless it is short and
-/// alphanumeric, so it's safe to put in a file name.
-fn extension_of(name: &str) -> Option<String> {
-    let extension = Path::new(name).extension()?.to_str()?;
-    (!extension.is_empty()
-        && extension.len() <= 10
-        && extension.chars().all(|c| c.is_ascii_alphanumeric()))
-    .then(|| extension.to_ascii_lowercase())
-}
-
-fn file_name_for(id: &str, extension: Option<&str>) -> String {
-    match extension {
-        Some(extension) => format!("{id}.{extension}"),
-        None => id.to_owned(),
+        self.media_dir()
+            .join(media_file_name(&asset.id, &asset.name))
     }
 }
 
@@ -87,7 +68,7 @@ pub(crate) fn import_image_bytes(
     let fail = |reason: String| format!("{name}: {reason}");
 
     let id = new_id();
-    let destination = files.media_dir().join(file_name_for(&id, Some(extension)));
+    let destination = files.media_dir().join(media_file_name(&id, &name));
     fs::create_dir_all(files.media_dir()).map_err(|error| fail(error.to_string()))?;
     fs::write(&destination, bytes).map_err(|error| fail(error.to_string()))?;
     match opencut_media::probe_asset(&destination, id) {

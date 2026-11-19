@@ -14,6 +14,8 @@ opencut-model = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+# Reads classic export zips (STORE entries; deflate for zips re-packed by hand).
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
