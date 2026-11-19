@@ -6,6 +6,7 @@ members = [
   'crates/model',
   'crates/editor',
   'crates/media',
+  'crates/project-store',
 ]
 
 [workspace.package]
@@ -25,3 +26,4 @@ opencut-time = { path = "crates/time" }
 opencut-model = { path = "crates/model" }
 opencut-editor = { path = "crates/editor" }
 opencut-media = { path = "crates/media" }
+opencut-project-store = { path = "crates/project-store" }
