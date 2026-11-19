@@ -8,11 +8,15 @@
 mod animation;
 mod command;
 pub mod commands;
+pub mod drop_target;
 mod editor;
 mod error;
+pub mod group_edit;
 pub mod placement;
 mod playback;
+pub mod ripple;
 mod selection;
+pub mod snapping;
 
 pub use command::{Batch, Command, Outcome};
 pub use editor::{Editor, HISTORY_LIMIT};
