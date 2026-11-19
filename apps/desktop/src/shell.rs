@@ -7,12 +7,14 @@ use gpui::{
 use opencut_editor::model::Project;
 use opencut_project_store::ProjectStore;
 
+use crate::actions::{self, CancelInteraction, ShowShortcuts, clipboard_is_copied_elements};
 use crate::components::{Button, ButtonSize, ButtonVariant, Label};
 use crate::media::MediaThumbnails;
 use crate::panels::{
     BROWSER_KEY_CONTEXT, Browser, Inspector, Preview, RemoveSelectedMedia, Timeline,
 };
 use crate::projects::{OpenProject, ProjectsView};
+use crate::shortcuts::ShortcutsDialog;
 use crate::theme::ActiveTheme;
 use crate::workspace::Workspace;
 
@@ -22,17 +24,14 @@ const APP_NAME: &str = "OpenCut";
 
 /// The app's key bindings. `secondary` is Cmd on macOS and Ctrl elsewhere.
 pub(crate) fn bind_keys(cx: &mut App) {
+    // Editing shortcuts, undo/redo and paste: see `actions::SHORTCUTS`.
+    crate::actions::bind_keys(cx);
     cx.bind_keys([
-        KeyBinding::new("secondary-z", Undo, None),
-        KeyBinding::new("secondary-shift-z", Redo, None),
         KeyBinding::new("secondary-i", ImportMedia, None),
-        KeyBinding::new("secondary-v", Paste, None),
         KeyBinding::new("secondary-shift-o", CloseProject, None),
         KeyBinding::new("backspace", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
         KeyBinding::new("delete", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
     ]);
-    #[cfg(not(target_os = "macos"))]
-    cx.bind_keys([KeyBinding::new("ctrl-y", Redo, None)]);
 }
 
 /// What the window shows: the projects list, or one project in the editor.
@@ -73,6 +72,7 @@ pub(crate) struct Shell {
     store: ProjectStore,
     screen: Screen,
     focus_handle: FocusHandle,
+    show_shortcuts: bool,
     _save_on_quit: Subscription,
 }
 
@@ -96,6 +96,7 @@ impl Shell {
             store,
             screen,
             focus_handle,
+            show_shortcuts: false,
             _save_on_quit: save_on_quit,
         }
     }
@@ -176,7 +177,17 @@ impl Shell {
                     .size(ButtonSize::Small)
                     .on_click(cx.listener(|this, _, window, cx| this.close_project(window, cx))),
             )
-            .child(Label::new(name));
+            .child(Label::new(name))
+            .child(div().flex_1())
+            .child(
+                Button::new("show-shortcuts", "Shortcuts")
+                    .variant(ButtonVariant::Ghost)
+                    .size(ButtonSize::Small)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_shortcuts = true;
+                        cx.notify();
+                    })),
+            );
 
         div()
             .flex()
@@ -206,7 +217,16 @@ impl Render for Shell {
             Screen::Editor(panels) => self.render_editor(panels, window, cx).into_any_element(),
         };
 
-        div()
+        let shortcuts_dialog = self.show_shortcuts.then(|| {
+            let this = cx.entity().downgrade();
+            ShortcutsDialog::new().on_close(move |_, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    this.show_shortcuts = false;
+                    cx.notify();
+                });
+            })
+        });
+        let mut root = div()
             .id("shell")
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &Undo, _, cx| {
@@ -224,10 +244,40 @@ impl Render for Shell {
                     workspace.update(cx, |workspace, cx| workspace.prompt_import(cx));
                 }
             }))
+            // Pastes copied timeline elements, or imports media from the
+            // system clipboard.
             .on_action(cx.listener(|this, _: &Paste, _, cx| {
-                if let (Some(workspace), Some(item)) = (this.workspace(), cx.read_from_clipboard())
-                {
-                    workspace.update(cx, |workspace, cx| workspace.paste(&item, cx));
+                let Some(workspace) = this.workspace() else {
+                    return;
+                };
+                let item = cx.read_from_clipboard();
+                workspace.update(cx, |workspace, cx| {
+                    let copied = clipboard_is_copied_elements(item.as_ref());
+                    let imported =
+                        !copied && item.as_ref().is_some_and(|item| workspace.paste(item, cx));
+                    if !imported {
+                        workspace.paste_elements(cx);
+                    }
+                });
+            }))
+            .on_action(cx.listener(|this, _: &ShowShortcuts, _, cx| {
+                this.show_shortcuts = !this.show_shortcuts;
+                cx.notify();
+            }))
+            // Esc: close the dialog, else abandon a drag, else deselect.
+            .on_action(cx.listener(|this, _: &CancelInteraction, _, cx| {
+                if this.show_shortcuts {
+                    this.show_shortcuts = false;
+                    cx.notify();
+                } else if let Screen::Editor(panels) = &this.screen {
+                    let cancelled = panels
+                        .timeline
+                        .update(cx, |timeline, cx| timeline.cancel_interaction(cx));
+                    if !cancelled {
+                        panels
+                            .workspace
+                            .update(cx, |workspace, cx| workspace.set_selection(Vec::new(), cx));
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseProject, window, cx| {
@@ -244,5 +294,10 @@ impl Render for Shell {
             .bg(colors.background)
             .text_color(colors.foreground)
             .child(content)
+            .children(shortcuts_dialog);
+        if let Some(workspace) = self.workspace() {
+            root = actions::register(root.key_context(actions::KEY_CONTEXT), workspace);
+        }
+        root
     }
 }

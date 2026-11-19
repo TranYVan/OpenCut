@@ -316,6 +316,17 @@ impl Timeline {
         self.set_zoom(zoom, anchor, cx);
     }
 
+    /// Abandons a drag in progress (move, trim or box select) without
+    /// running its command. Returns `false` when there was none.
+    pub(crate) fn cancel_interaction(&mut self, cx: &mut Context<Self>) -> bool {
+        let cancelled = self.drag.take().is_some();
+        if cancelled {
+            self.auto_scroll = None;
+            cx.notify();
+        }
+        cancelled
+    }
+
     fn zoom_to_fit(&mut self, cx: &mut Context<Self>) {
         let zoom = zoom_to_fit(self.duration(cx), self.viewport_width(), FIT_SHARE);
         self.zoom = clamp_zoom(zoom, self.min_zoom(cx));
