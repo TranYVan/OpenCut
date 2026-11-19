@@ -3861,7 +3861,9 @@ dependencies = [
  "image",
  "opencut-editor",
  "opencut-media",
+ "opencut-project-store",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3907,6 +3909,19 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "opencut-project-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "opencut-model",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

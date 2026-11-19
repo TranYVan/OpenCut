@@ -129,17 +129,12 @@ impl Timeline {
         self.seen_revision = revision;
         self.seen_position = position;
 
+        // The workspace restores the playhead when it opens the project.
         if opened {
-            let view = project.timeline_view_state.clone();
-            self.zoom = view.as_ref().map_or(DEFAULT_ZOOM, |view| view.zoom_level);
-            self.scroll_x = view.as_ref().map_or(0.0, |view| view.scroll_left);
+            let view = self.workspace.read(cx).timeline_view();
+            self.zoom = view.map_or(DEFAULT_ZOOM, |view| view.zoom_level);
+            self.scroll_x = view.map_or(0.0, |view| view.scroll_left);
             self.scroll_y = 0.0;
-            if let Some(view) = view
-                && view.playhead_time != position
-            {
-                self.workspace
-                    .update(cx, |workspace, cx| workspace.seek(view.playhead_time, cx));
-            }
         }
         self.load_previews(cx);
         cx.notify();
@@ -214,7 +209,17 @@ impl Timeline {
         self.scroll_x = anchored_scroll(anchor_x, self.scroll_x, self.zoom, zoom);
         self.zoom = zoom;
         self.clamp_scroll(cx);
+        self.save_view(cx);
         cx.notify();
+    }
+
+    /// Hands zoom and horizontal scroll to the workspace, which saves them
+    /// with the project (debounced, not undoable).
+    fn save_view(&self, cx: &mut Context<Self>) {
+        let (zoom, scroll_x) = (self.zoom, self.scroll_x);
+        self.workspace.update(cx, |workspace, cx| {
+            workspace.set_timeline_view(zoom, scroll_x, cx);
+        });
     }
 
     /// Toolbar zoom: moves `step` (a share of the whole range) along the
@@ -236,6 +241,7 @@ impl Timeline {
         let zoom = zoom_to_fit(self.duration(cx), self.viewport_width(), FIT_SHARE);
         self.zoom = clamp_zoom(zoom, self.min_zoom(cx));
         self.scroll_x = 0.0;
+        self.save_view(cx);
         cx.notify();
     }
 
@@ -280,6 +286,7 @@ impl Timeline {
             self.scroll_y -= dy;
         }
         self.clamp_scroll(cx);
+        self.save_view(cx);
         cx.notify();
     }
 

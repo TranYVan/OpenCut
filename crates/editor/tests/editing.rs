@@ -583,3 +583,40 @@ fn main_track_never_starts_with_a_gap() {
         .unwrap();
     assert_eq!(element(&editor, &b).start_time(), secs(6.0));
 }
+
+#[test]
+fn timeline_view_state_is_saved_but_not_undoable() {
+    use opencut_editor::model::TimelineViewState;
+
+    let mut editor = editor();
+    insert(&mut editor, video("a", 0.0, 4.0));
+    let revision = editor.revision();
+    let view = TimelineViewState {
+        zoom_level: 2.0,
+        scroll_left: 120.0,
+        playhead_time: MediaTime::ZERO,
+    };
+    assert!(editor.set_timeline_view_state(view.clone()));
+    assert!(!editor.set_timeline_view_state(view.clone()));
+    assert_eq!(editor.revision(), revision, "view changes aren't edits");
+
+    // Undo and redo swap the document but keep the view.
+    assert!(editor.undo());
+    assert_eq!(editor.timeline_view_state(), Some(&view));
+    assert!(editor.redo());
+    assert_eq!(editor.timeline_view_state(), Some(&view));
+
+    // Saving records the playhead; reopening puts it back.
+    editor.seek(secs(1.5));
+    let saved = editor.project_to_save();
+    assert_eq!(
+        saved
+            .timeline_view_state
+            .as_ref()
+            .map(|view| view.playhead_time),
+        Some(secs(1.5))
+    );
+    let reopened = Editor::new(saved.clone()).unwrap();
+    assert_eq!(reopened.playback().position, secs(1.5));
+    assert_eq!(reopened.project(), &saved);
+}

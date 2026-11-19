@@ -1,6 +1,6 @@
 use chrono::{SubsecRound, Utc};
 use opencut_model::time::MediaTime;
-use opencut_model::{Project, SceneTracks, ValidationError};
+use opencut_model::{Project, SceneTracks, TimelineViewState, ValidationError};
 
 use crate::command::{Command, Outcome};
 use crate::error::EditError;
@@ -38,7 +38,11 @@ pub struct Editor {
 impl Editor {
     pub fn new(project: Project) -> Result<Self, ValidationError> {
         project.validate()?;
-        Ok(Self {
+        let playhead = project
+            .timeline_view_state
+            .as_ref()
+            .map(|view| view.playhead_time);
+        let mut editor = Self {
             project,
             selection: Selection::default(),
             playback: Playback::default(),
@@ -47,7 +51,12 @@ impl Editor {
             revision: 0,
             snapping_enabled: true,
             ripple_enabled: false,
-        })
+        };
+        // A saved project reopens with the playhead where it was left.
+        if let Some(playhead) = playhead {
+            editor.seek(playhead);
+        }
+        Ok(editor)
     }
 
     pub fn project(&self) -> &Project {
@@ -147,7 +156,7 @@ impl Editor {
         let Some(entry) = self.undo_stack.pop() else {
             return false;
         };
-        self.project = entry.before.clone();
+        self.restore(entry.before.clone());
         if entry.selection_after.is_some() {
             self.selection = entry.selection_before.clone();
         }
@@ -162,7 +171,7 @@ impl Editor {
         let Some(entry) = self.redo_stack.pop() else {
             return false;
         };
-        self.project = entry.after.clone();
+        self.restore(entry.after.clone());
         if let Some(selection) = &entry.selection_after {
             self.selection = selection.clone();
         }
@@ -170,6 +179,40 @@ impl Editor {
         self.revision += 1;
         self.undo_stack.push(entry);
         true
+    }
+
+    /// Where the timeline was zoomed and scrolled. Saved with the project
+    /// (classic `timelineViewState`); `playhead_time` is filled from the
+    /// playhead when the project is saved, see [`Editor::project_to_save`].
+    pub fn timeline_view_state(&self) -> Option<&TimelineViewState> {
+        self.project.timeline_view_state.as_ref()
+    }
+
+    /// Updates the saved timeline view. Not an edit: no undo step, no
+    /// revision bump, and undo/redo leave it alone. Returns whether it
+    /// changed, so the caller knows to schedule a save.
+    pub fn set_timeline_view_state(&mut self, state: TimelineViewState) -> bool {
+        if self.project.timeline_view_state.as_ref() == Some(&state) {
+            return false;
+        }
+        self.project.timeline_view_state = Some(state);
+        true
+    }
+
+    /// The project as it should be written to disk: the document plus the
+    /// current playhead in its timeline view state.
+    pub fn project_to_save(&self) -> Project {
+        let mut project = self.project.clone();
+        let view = project
+            .timeline_view_state
+            // Classic `defaultTimelineViewState`.
+            .get_or_insert(TimelineViewState {
+                zoom_level: 1.0,
+                scroll_left: 0.0,
+                playhead_time: MediaTime::ZERO,
+            });
+        view.playhead_time = self.playback.position;
+        project
     }
 
     /// Forgets all undo history, e.g. after loading a project.
@@ -218,6 +261,13 @@ impl Editor {
 
     pub fn toggle_playing(&mut self) {
         self.playback.playing = !self.playback.playing;
+    }
+
+    /// Swaps in a history snapshot, keeping the current timeline view: it
+    /// isn't part of the edit history.
+    fn restore(&mut self, mut project: Project) {
+        project.timeline_view_state = self.project.timeline_view_state.take();
+        self.project = project;
     }
 
     fn prune_selection(&mut self) {

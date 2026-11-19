@@ -6,6 +6,7 @@ use gpui::{
 mod components;
 mod media;
 mod panels;
+mod projects;
 mod shell;
 mod theme;
 mod workspace;
@@ -35,6 +36,14 @@ fn main() {
 
     Application::new().run(|cx: &mut App| {
         shell::bind_keys(cx);
+        // One window: closing it quits (on macOS too), which runs the quit
+        // hook that saves the open project.
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
         let bounds = Bounds::centered(None, size(px(960.), px(600.)), cx);
         cx.open_window(
             WindowOptions {

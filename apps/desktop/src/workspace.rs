@@ -1,36 +1,86 @@
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
-use gpui::{ClipboardEntry, ClipboardItem, Context, ImageFormat, PathPromptOptions, SharedString};
+use gpui::{
+    ClipboardEntry, ClipboardItem, Context, ImageFormat, PathPromptOptions, SharedString, Task,
+};
 use opencut_editor::commands::{AddMediaAsset, RemoveMediaAssets};
 use opencut_editor::model::time::MediaTime;
-use opencut_editor::model::{MediaAsset, Project};
+use opencut_editor::model::{MediaAsset, Project, TimelineViewState};
 use opencut_editor::{Batch, Command, Editor};
+use opencut_project_store::{ProjectStore, StoreError};
 
 use crate::media::{ProjectFiles, import_file, import_image_bytes, paths_in_text};
+
+/// How long the project must sit unchanged before it's autosaved
+/// (classic `SaveManager`'s 800 ms).
+const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
 
 /// The open project: the headless [`Editor`] plus where its files live.
 /// Shared by the panels as an `Entity`; every project change goes through
 /// an editor command so it's undoable.
+///
+/// Autosaves: every edit (any [`Editor::revision`] bump, undo and redo
+/// included) and every timeline view or playhead change schedules a save
+/// [`AUTOSAVE_DELAY`] later; further changes push it back. The write runs
+/// off the UI thread. Closing the project or quitting the app saves at once.
 pub(crate) struct Workspace {
     editor: Editor,
+    store: ProjectStore,
     files: ProjectFiles,
+    autosave: Autosave,
     /// Files being probed and copied right now.
     importing: usize,
-    /// The last import or edit problem, shown in the Browser.
+    /// The last import, edit or save problem, shown in the Browser.
     notice: Option<SharedString>,
 }
 
+/// Whatever drops the project (closing it, closing the window) saves it
+/// first. Quitting saves through the shell's quit hook, since GPUI doesn't
+/// promise to drop entities on quit.
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        self.save_now();
+    }
+}
+
+struct Autosave {
+    /// The editor revision in the last snapshot handed to a writer.
+    saved_revision: u64,
+    /// The timeline view or playhead changed since the last snapshot.
+    view_changed: bool,
+    /// The debounce timer; replacing it cancels the previous one.
+    timer: Option<Task<()>>,
+    /// Numbers every snapshot handed to a writer, in order.
+    next_sequence: u64,
+    /// The sequence number of the snapshot on disk. Writers hold this lock
+    /// while writing, so writes never interleave and an older snapshot
+    /// never overwrites a newer one.
+    written: Arc<Mutex<u64>>,
+}
+
 impl Workspace {
-    pub(crate) fn new() -> Self {
-        let project =
-            debug_project().unwrap_or_else(|| Project::new("Untitled project", chrono::Utc::now()));
-        let files = ProjectFiles::for_project(&project.metadata.id);
-        Self {
-            editor: Editor::new(project).expect("a new project is valid"),
-            files,
+    /// Opens `project`, whose folder in `store` holds its media.
+    pub(crate) fn open(store: ProjectStore, project: Project) -> Result<Self, String> {
+        let root = store
+            .project_dir(&project.metadata.id)
+            .map_err(|error| error.to_string())?;
+        let editor = Editor::new(project).map_err(|error| error.to_string())?;
+        Ok(Self {
+            autosave: Autosave {
+                saved_revision: editor.revision(),
+                view_changed: false,
+                timer: None,
+                next_sequence: 0,
+                written: Arc::new(Mutex::new(0)),
+            },
+            editor,
+            store,
+            files: ProjectFiles::new(root),
             importing: 0,
             notice: None,
-        }
+        })
     }
 
     pub(crate) fn editor(&self) -> &Editor {
@@ -47,6 +97,62 @@ impl Workspace {
 
     pub(crate) fn notice(&self) -> Option<&SharedString> {
         self.notice.as_ref()
+    }
+
+    pub(crate) fn project_name(&self) -> &str {
+        &self.editor.project().metadata.name
+    }
+
+    /// The timeline's saved zoom and scroll; `None` for a project whose
+    /// timeline view was never saved. The playhead is
+    /// `editor().playback().position`, restored on open.
+    pub(crate) fn timeline_view(&self) -> Option<&TimelineViewState> {
+        self.editor.timeline_view_state()
+    }
+
+    /// Records the timeline's zoom and horizontal scroll (pixels) so they're
+    /// saved with the project. Not undoable. Call it whenever the timeline
+    /// zooms or scrolls; saving is debounced.
+    pub(crate) fn set_timeline_view(
+        &mut self,
+        zoom_level: f64,
+        scroll_left: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let state = TimelineViewState {
+            zoom_level,
+            scroll_left,
+            playhead_time: self.editor.playback().position,
+        };
+        if self.editor.set_timeline_view_state(state) {
+            self.autosave.view_changed = true;
+            self.schedule_save(cx);
+        }
+    }
+
+    /// Moves the playhead (snapped to a frame, clamped to the scene). Where
+    /// it ends up is saved with the project.
+    pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
+        let before = self.editor.playback().position;
+        self.editor.seek(time);
+        if self.editor.playback().position != before {
+            self.autosave.view_changed = true;
+            self.schedule_save(cx);
+            cx.notify();
+        }
+    }
+
+    /// Writes the project now if it has unsaved changes, cancelling the
+    /// pending autosave. Blocks; for closing the project and quitting.
+    pub(crate) fn save_now(&mut self) {
+        self.autosave.timer = None;
+        let Some((snapshot, sequence)) = self.take_snapshot() else {
+            return;
+        };
+        if let Err(error) = write_in_order(&self.store, &snapshot, sequence, &self.autosave.written)
+        {
+            self.save_failed(&error);
+        }
     }
 
     /// Opens the system file picker and imports what the user picks.
@@ -145,13 +251,13 @@ impl Workspace {
 
     pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
         if self.editor.undo() {
-            cx.notify();
+            self.changed(cx);
         }
     }
 
     pub(crate) fn redo(&mut self, cx: &mut Context<Self>) {
         if self.editor.redo() {
-            cx.notify();
+            self.changed(cx);
         }
     }
 
@@ -189,44 +295,92 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Moves the playhead (snapped to a frame, clamped to the scene). Not
-    /// an edit, so not undoable.
-    pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
-        let before = self.editor.playback().position;
-        self.editor.seek(time);
-        if self.editor.playback().position != before {
-            cx.notify();
-        }
-    }
-
     pub(crate) fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
         if let Err(error) = self.editor.execute(command) {
             self.notice = Some(format!("{}: {error}", command.label()).into());
         }
-        cx.notify();
+        self.changed(cx);
     }
 
     fn set_notice(&mut self, message: String, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
         cx.notify();
     }
+
+    /// Schedules an autosave if the project changed, and re-renders.
+    fn changed(&mut self, cx: &mut Context<Self>) {
+        if self.editor.revision() != self.autosave.saved_revision {
+            self.schedule_save(cx);
+        }
+        cx.notify();
+    }
+
+    /// (Re)starts the autosave timer.
+    fn schedule_save(&mut self, cx: &mut Context<Self>) {
+        let timer = cx.background_executor().timer(AUTOSAVE_DELAY);
+        self.autosave.timer = Some(cx.spawn(async move |this, cx| {
+            timer.await;
+            let _ = this.update(cx, |this, cx| this.save_in_background(cx));
+        }));
+    }
+
+    fn save_in_background(&mut self, cx: &mut Context<Self>) {
+        self.autosave.timer = None;
+        let Some((snapshot, sequence)) = self.take_snapshot() else {
+            return;
+        };
+        let store = self.store.clone();
+        let written = Arc::clone(&self.autosave.written);
+        let work = cx
+            .background_executor()
+            .spawn(async move { write_in_order(&store, &snapshot, sequence, &written) });
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = work.await {
+                let _ = this.update(cx, |this, cx| {
+                    this.save_failed(&error);
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// What to write, if anything changed since the last snapshot. Marks
+    /// the current state as saved.
+    fn take_snapshot(&mut self) -> Option<(Project, u64)> {
+        let revision = self.editor.revision();
+        if revision == self.autosave.saved_revision && !self.autosave.view_changed {
+            return None;
+        }
+        self.autosave.saved_revision = revision;
+        self.autosave.view_changed = false;
+        self.autosave.next_sequence += 1;
+        Some((self.editor.project_to_save(), self.autosave.next_sequence))
+    }
+
+    /// Keeps the project marked unsaved, so the next change or closing the
+    /// project tries again.
+    fn save_failed(&mut self, error: &StoreError) {
+        self.autosave.view_changed = true;
+        self.notice = Some(format!("Couldn't save the project: {error}").into());
+    }
 }
 
-/// Debug builds open the project JSON at `$OPENCUT_DEBUG_PROJECT` (e.g. the
-/// classic fixture in `crates/model/tests/fixtures`) instead of a new one,
-/// until projects can be opened from the UI.
-#[cfg(debug_assertions)]
-fn debug_project() -> Option<Project> {
-    let path = std::env::var_os("OPENCUT_DEBUG_PROJECT")?;
-    let text = std::fs::read_to_string(&path).ok()?;
-    let project: Project = serde_json::from_str(&text).ok()?;
-    project.validate().ok()?;
-    Some(project)
-}
-
-#[cfg(not(debug_assertions))]
-fn debug_project() -> Option<Project> {
-    None
+/// Saves `snapshot` unless a newer one (higher `sequence`) is already on
+/// disk. Holding the lock while writing keeps writers from interleaving.
+fn write_in_order(
+    store: &ProjectStore,
+    snapshot: &Project,
+    sequence: u64,
+    written: &Mutex<u64>,
+) -> Result<(), StoreError> {
+    let mut written = written.lock().unwrap_or_else(PoisonError::into_inner);
+    if *written >= sequence {
+        return Ok(());
+    }
+    store.save(snapshot)?;
+    *written = sequence;
+    Ok(())
 }
 
 fn image_extension(format: ImageFormat) -> &'static str {
@@ -238,5 +392,27 @@ fn image_extension(format: ImageFormat) -> &'static str {
         ImageFormat::Svg => "svg",
         ImageFormat::Bmp => "bmp",
         ImageFormat::Tiff => "tiff",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_snapshots_never_overwrite_newer_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ProjectStore::new(dir.path());
+        let written = Mutex::new(0);
+        let mut project = Project::new("v1", chrono::Utc::now());
+        let id = project.metadata.id.clone();
+
+        project.metadata.name = "newer".to_owned();
+        write_in_order(&store, &project, 2, &written).unwrap();
+        project.metadata.name = "older".to_owned();
+        write_in_order(&store, &project, 1, &written).unwrap();
+
+        assert_eq!(store.load(&id).unwrap().metadata.name, "newer");
+        assert_eq!(*written.lock().unwrap(), 2);
     }
 }

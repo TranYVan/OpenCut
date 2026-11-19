@@ -5,32 +5,28 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use opencut_editor::model::{MediaAsset, new_id};
+use opencut_project_store::{CACHE_DIR, MEDIA_DIR};
 
-/// Where a project's files live on disk: `<app data>/OpenCut/projects/<id>`,
-/// with imported media in `media/` and derived data (waveform summaries)
-/// in `cache/`.
-///
-/// TODO(#15): projects aren't saved or reopened yet, so every launch starts
-/// a new project folder. Saving and loading should take this over.
+/// Where a project's files live on disk: the project's folder in the
+/// [`ProjectStore`](opencut_project_store::ProjectStore), with imported
+/// media in `media/` and derived data (waveform summaries) in `cache/`.
 #[derive(Clone, Debug)]
 pub(crate) struct ProjectFiles {
     root: PathBuf,
 }
 
 impl ProjectFiles {
-    pub(crate) fn for_project(project_id: &str) -> Self {
-        Self {
-            root: app_data_dir().join("projects").join(project_id),
-        }
+    pub(crate) fn new(root: PathBuf) -> Self {
+        Self { root }
     }
 
     pub(crate) fn media_dir(&self) -> PathBuf {
-        self.root.join("media")
+        self.root.join(MEDIA_DIR)
     }
 
     /// Data derived from the media that can be rebuilt, e.g. waveforms.
     pub(crate) fn cache_dir(&self) -> PathBuf {
-        self.root.join("cache")
+        self.root.join(CACHE_DIR)
     }
 
     /// The project's copy of an asset's file: `media/<asset id>.<ext>`,
@@ -41,21 +37,6 @@ impl ProjectFiles {
             extension_of(&asset.name).as_deref(),
         ))
     }
-}
-
-/// The OS's per-user app data folder, `OpenCut` inside it.
-fn app_data_dir() -> PathBuf {
-    let env_dir = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
-    let base = if cfg!(target_os = "macos") {
-        env_dir("HOME").map(|home| PathBuf::from(home).join("Library/Application Support"))
-    } else if cfg!(target_os = "windows") {
-        env_dir("APPDATA").map(PathBuf::from)
-    } else {
-        env_dir("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .or_else(|| env_dir("HOME").map(|home| PathBuf::from(home).join(".local/share")))
-    };
-    base.unwrap_or_else(std::env::temp_dir).join("OpenCut")
 }
 
 /// A file's extension, lowercased; `None` unless it is short and
@@ -177,9 +158,7 @@ mod tests {
 
     #[test]
     fn media_paths_use_the_asset_id_and_a_safe_extension() {
-        let files = ProjectFiles {
-            root: PathBuf::from("/projects/p"),
-        };
+        let files = ProjectFiles::new(PathBuf::from("/projects/p"));
         let mut asset = MediaAsset {
             id: "abc".to_owned(),
             name: "Beach Day.MP4".to_owned(),
