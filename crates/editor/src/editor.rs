@@ -307,12 +307,56 @@ impl Editor {
         self.seek(self.duration());
     }
 
-    pub fn set_playing(&mut self, playing: bool) {
-        self.playback.playing = playing;
+    /// Moves the playhead by `delta` (negative goes back), snapped to a frame
+    /// and clamped to the scene. Classic `seek-forward` and `jump-*`.
+    pub fn seek_by(&mut self, delta: MediaTime) {
+        self.seek(self.playback.position + delta);
+    }
+
+    /// Starts playing, from the start when the playhead is at the end.
+    /// Does nothing on an empty scene.
+    pub fn play(&mut self) {
+        let duration = self.duration();
+        if duration <= MediaTime::ZERO {
+            return;
+        }
+        if self.playback.position >= duration {
+            self.go_to_start();
+        }
+        self.playback.playing = true;
+    }
+
+    pub fn pause(&mut self) {
+        self.playback.playing = false;
+    }
+
+    /// Classic `stop-playback`: pause and return to the start.
+    pub fn stop(&mut self) {
+        self.pause();
+        self.go_to_start();
     }
 
     pub fn toggle_playing(&mut self) {
-        self.playback.playing = !self.playback.playing;
+        if self.playback.playing {
+            self.pause();
+        } else {
+            self.play();
+        }
+    }
+
+    /// Moves the playhead to where the playback clock says it is: the frame
+    /// being shown (floored, never ahead of the audio). Pauses at the end of
+    /// the scene. Returns whether playback is still running.
+    pub fn advance_to(&mut self, time: MediaTime) -> bool {
+        let rate = self.project.settings.fps;
+        let duration = self.duration();
+        if time >= duration {
+            self.playback.position = duration;
+            self.playback.playing = false;
+        } else if let Some(frame) = time.floor_to_frame(rate) {
+            self.playback.position = frame.max(MediaTime::ZERO);
+        }
+        self.playback.playing
     }
 
     /// Swaps in a history snapshot, keeping the current timeline view: it

@@ -13,6 +13,10 @@ use opencut_project_store::{ProjectStore, StoreError};
 
 use crate::media::{ProjectFiles, import_file, import_image_bytes, paths_in_text};
 
+mod playback;
+
+pub(crate) use playback::Transport;
+
 /// How long the project must sit unchanged before it's autosaved
 /// (classic `SaveManager`'s 800 ms).
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
@@ -39,6 +43,8 @@ pub(crate) struct Workspace {
     notice: Option<SharedString>,
     /// Clears `notice`; replacing it cancels the previous one.
     notice_timer: Option<Task<()>>,
+    /// Audio output, clock and frame scheduling while playing.
+    engine: playback::Engine,
 }
 
 /// Whatever drops the project (closing it, closing the window) saves it
@@ -86,6 +92,7 @@ impl Workspace {
             importing: 0,
             notice: None,
             notice_timer: None,
+            engine: playback::Engine::default(),
         })
     }
 
@@ -141,9 +148,17 @@ impl Workspace {
     pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
         let before = self.editor.playback().position;
         self.editor.seek(time);
+        self.position_moved(before, cx);
+    }
+
+    /// After a seek: saves the playhead, re-syncs audio if playing, redraws.
+    fn position_moved(&mut self, before: MediaTime, cx: &mut Context<Self>) {
         if self.editor.playback().position != before {
             self.autosave.view_changed = true;
             self.schedule_save(cx);
+            if self.editor.playback().playing {
+                self.start_session(cx);
+            }
             cx.notify();
         }
     }
@@ -362,6 +377,10 @@ impl Workspace {
     fn changed(&mut self, cx: &mut Context<Self>) {
         if self.editor.revision() != self.autosave.saved_revision {
             self.schedule_save(cx);
+        }
+        // An edit while playing: remix from the playhead.
+        if self.editor.playback().playing {
+            self.start_session(cx);
         }
         cx.notify();
     }

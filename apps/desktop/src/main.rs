@@ -4,6 +4,7 @@ use gpui::{
 };
 
 mod actions;
+mod audio;
 mod components;
 mod media;
 mod panels;

@@ -16,7 +16,7 @@ use crate::panels::{
 use crate::projects::{OpenProject, ProjectsView};
 use crate::shortcuts::ShortcutsDialog;
 use crate::theme::ActiveTheme;
-use crate::workspace::Workspace;
+use crate::workspace::{Transport, Workspace};
 
 actions!(opencut, [Undo, Redo, ImportMedia, Paste, CloseProject]);
 
@@ -29,6 +29,19 @@ pub(crate) fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("secondary-i", ImportMedia, None),
         KeyBinding::new("secondary-shift-o", CloseProject, None),
+        // Classic playback shortcuts.
+        KeyBinding::new("space", Transport::TogglePlay, None),
+        KeyBinding::new("k", Transport::TogglePlay, None),
+        KeyBinding::new("shift-space", Transport::StopPlayback, None),
+        KeyBinding::new("l", Transport::SeekForward, None),
+        KeyBinding::new("j", Transport::SeekBackward, None),
+        KeyBinding::new("right", Transport::FrameStepForward, None),
+        KeyBinding::new("left", Transport::FrameStepBackward, None),
+        KeyBinding::new("shift-right", Transport::JumpForward, None),
+        KeyBinding::new("shift-left", Transport::JumpBackward, None),
+        KeyBinding::new("home", Transport::GotoStart, None),
+        KeyBinding::new("enter", Transport::GotoStart, None),
+        KeyBinding::new("end", Transport::GotoEnd, None),
         KeyBinding::new("backspace", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
         KeyBinding::new("delete", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
     ]);
@@ -278,6 +291,15 @@ impl Render for Shell {
                             .workspace
                             .update(cx, |workspace, cx| workspace.set_selection(Vec::new(), cx));
                     }
+                }
+            }))
+            .on_action(cx.listener(|this, action: &Transport, _, cx| {
+                match this.workspace() {
+                    Some(workspace) => {
+                        workspace.update(cx, |workspace, cx| workspace.run_transport(*action, cx));
+                    }
+                    // Not editing: let the key reach whatever is focused.
+                    None => cx.propagate(),
                 }
             }))
             .on_action(cx.listener(|this, _: &CloseProject, window, cx| {
