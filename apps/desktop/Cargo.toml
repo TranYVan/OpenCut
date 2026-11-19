@@ -14,6 +14,7 @@ chrono = { workspace = true }
 gpui = { workspace = true }
 # Same major as gpui's own, so thumbnails decode with what's already built.
 image = "0.25"
+opencut-compositor = { workspace = true, features = ["media"] }
 opencut-editor = { workspace = true }
 opencut-media = { workspace = true }
 opencut-project-store = { workspace = true }
