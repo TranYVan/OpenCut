@@ -16,6 +16,9 @@ use crate::media::{ProjectFiles, import_file, import_image_bytes, paths_in_text}
 /// How long the project must sit unchanged before it's autosaved
 /// (classic `SaveManager`'s 800 ms).
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
+/// How long an import or edit notice stays up. Save failures stay until
+/// replaced, since they mean unsaved work.
+const NOTICE_DURATION: Duration = Duration::from_secs(5);
 
 /// The open project: the headless [`Editor`] plus where its files live.
 /// Shared by the panels as an `Entity`; every project change goes through
@@ -34,6 +37,8 @@ pub(crate) struct Workspace {
     importing: usize,
     /// The last import, edit or save problem, shown in the Browser.
     notice: Option<SharedString>,
+    /// Clears `notice`; replacing it cancels the previous one.
+    notice_timer: Option<Task<()>>,
 }
 
 /// Whatever drops the project (closing it, closing the window) saves it
@@ -80,6 +85,7 @@ impl Workspace {
             files: ProjectFiles::new(root),
             importing: 0,
             notice: None,
+            notice_timer: None,
         })
     }
 
@@ -298,20 +304,27 @@ impl Workspace {
                 1 => format!("Couldn't import {first}"),
                 more => format!("Couldn't import {more} files. {first}"),
             };
-            self.notice = Some(message.into());
+            self.set_notice(message, cx);
         }
         cx.notify();
     }
 
     pub(crate) fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
         if let Err(error) = self.editor.execute(command) {
-            self.notice = Some(format!("{}: {error}", command.label()).into());
+            self.set_notice(format!("{}: {error}", command.label()), cx);
         }
         self.changed(cx);
     }
 
     fn set_notice(&mut self, message: String, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
+        self.notice_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(NOTICE_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                this.notice = None;
+                cx.notify();
+            });
+        }));
         cx.notify();
     }
 
@@ -370,6 +383,7 @@ impl Workspace {
     /// project tries again.
     fn save_failed(&mut self, error: &StoreError) {
         self.autosave.view_changed = true;
+        self.notice_timer = None;
         self.notice = Some(format!("Couldn't save the project: {error}").into());
     }
 }
