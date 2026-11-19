@@ -10,7 +10,12 @@ name = "opencut-desktop"
 path = "src/main.rs"
 
 [dependencies]
+chrono = { workspace = true }
 gpui = { workspace = true }
+# Same major as gpui's own, so thumbnails decode with what's already built.
+image = "0.25"
+opencut-editor = { workspace = true }
+opencut-media = { workspace = true }
 
 # Compile Metal shaders at runtime instead of in gpui's build.rs, so building
 # only needs the Xcode Command Line Tools (no full Xcode / `metal` compiler).

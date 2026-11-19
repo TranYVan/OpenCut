@@ -3639,7 +3639,11 @@ dependencies = [
 name = "opencut-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui",
+ "image",
+ "opencut-editor",
+ "opencut-media",
 ]
 
 [[package]]

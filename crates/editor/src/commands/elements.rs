@@ -2,11 +2,13 @@ use std::collections::HashSet;
 
 use opencut_model::time::MediaTime;
 use opencut_model::{
-    Element, ElementRef, ParamValues, Project, RetimeConfig, SceneTracks, Track, TrackKind, new_id,
+    CanvasSize, Element, ElementKind, ElementRef, MediaAsset, MediaType, ParamValues, Project,
+    RetimeConfig, SceneTracks, Track, TrackKind, new_id,
 };
 
 use crate::animation;
 use crate::command::{Command, Outcome, current_tracks};
+use crate::commands::media::frame_rate_from_f64;
 use crate::error::EditError;
 use crate::placement::{
     check_compatible, check_no_overlap, check_timing, default_insert_index,
@@ -50,6 +52,10 @@ pub enum Placement {
 }
 
 /// Adds an element to the timeline and selects it.
+///
+/// The first video or image on an empty timeline also sizes the canvas to
+/// its media and, for a video, sets the project frame rate to the video's
+/// (classic `InsertElementCommand`).
 pub struct InsertElement {
     element: Element,
     placement: Placement,
@@ -86,6 +92,7 @@ impl Command for InsertElement {
 
     fn apply(&mut self, project: &mut Project) -> Result<Outcome, EditError> {
         check_timing(&self.element)?;
+        let first_media = first_visual_media(project, &self.element);
         let tracks = current_tracks(project)?;
         let mut element = self.element.clone();
         let kind = element.kind().track_kind();
@@ -111,11 +118,47 @@ impl Command for InsertElement {
         track.elements.push(element);
         check_no_overlap(track)?;
 
+        if let Some(asset) = first_media {
+            adopt_media_settings(project, &asset);
+        }
+
         self.track_id = Some(track_id.clone());
         Ok(Outcome::select(vec![ElementRef::new(
             track_id,
             self.element.id(),
         )]))
+    }
+}
+
+/// The asset behind `element` when it is the first element of the current
+/// scene and a video or image.
+fn first_visual_media(project: &Project, element: &Element) -> Option<MediaAsset> {
+    if !matches!(element.kind(), ElementKind::Video | ElementKind::Image) {
+        return None;
+    }
+    if project.current_scene()?.tracks.element_count() != 0 {
+        return None;
+    }
+    project.media_asset(element.media_id()?).cloned()
+}
+
+/// Canvas size (and the original size, if unset) from the media's
+/// dimensions; frame rate from a video's. Rates the project can't use are
+/// ignored.
+fn adopt_media_settings(project: &mut Project, asset: &MediaAsset) {
+    let settings = &mut project.settings;
+    if let (Some(width), Some(height)) = (asset.width, asset.height)
+        && width > 0
+        && height > 0
+    {
+        let size = CanvasSize { width, height };
+        settings.canvas_size = size;
+        settings.original_canvas_size.get_or_insert(size);
+    }
+    if asset.media_type == MediaType::Video
+        && let Some(fps) = asset.fps.and_then(frame_rate_from_f64)
+    {
+        settings.fps = fps;
     }
 }
 

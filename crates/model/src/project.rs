@@ -148,6 +148,14 @@ pub struct Project {
     pub version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline_view_state: Option<TimelineViewState>,
+    /// The project's imported media, in import order.
+    ///
+    /// Desktop addition: the classic app kept assets in a separate IndexedDB
+    /// store, so classic files have no such key. It is optional both ways:
+    /// a classic file reads with no assets, and a project without assets
+    /// writes no key, so classic files still round-trip unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub media_assets: Vec<MediaAsset>,
 }
 
 impl Project {
@@ -170,7 +178,12 @@ impl Project {
             settings: ProjectSettings::default(),
             version: PROJECT_VERSION,
             timeline_view_state: None,
+            media_assets: Vec::new(),
         }
+    }
+
+    pub fn media_asset(&self, asset_id: &str) -> Option<&MediaAsset> {
+        self.media_assets.iter().find(|asset| asset.id == asset_id)
     }
 
     pub fn scene(&self, scene_id: &str) -> Option<&Scene> {
