@@ -1,13 +1,20 @@
 use gpui::{
     AnyElement, Context, DispatchPhase, Entity, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, SharedString, Subscription, Window, canvas, div, prelude::*, px,
+    MouseUpEvent, PathBuilder, Pixels, Point, SharedString, Subscription, Window, canvas, div,
+    fill, point, prelude::*, px,
 };
-use opencut_editor::Command;
-use opencut_editor::commands::{SetElementParam, SetElementRetime, ToggleSourceAudioSeparation};
+use opencut_editor::animation::{EASING_PRESETS, Easing, has_keyframes, segment_easing};
+use opencut_editor::commands::{
+    RemoveKeyframe, SetElementParam, SetElementRetime, SetKeyframeEasing,
+    ToggleSourceAudioSeparation, UpsertKeyframe,
+};
+use opencut_editor::model::animation::{Channel, ChannelData, ScalarChannel};
+use opencut_editor::model::time::MediaTime;
 use opencut_editor::model::{
-    Element, ElementKind, ElementRef, MediaAsset, ParamDefinition, ParamKind, ParamValue,
-    ParamValues, RetimeConfig, Unit, param_value, visible_params,
+    Animations, Element, ElementKind, ElementRef, MediaAsset, ParamDefinition, ParamKind,
+    ParamValue, ParamValues, RetimeConfig, Unit, param_value, visible_params,
 };
+use opencut_editor::{Command, Editor};
 
 use crate::components::{Button, ButtonSize, ButtonVariant, Label, NumberField, Separator};
 use crate::theme::ActiveTheme;
@@ -18,6 +25,9 @@ const SPEED_STEP: f64 = 0.01;
 const SPEED_PRESETS: [f64; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 /// A stepper button moves a number this many steps.
 const COARSE_STEPS: f64 = 10.0;
+/// The curve graph's size; its height spans easing values -0.5 to 1.5.
+const GRAPH_SIZE: f32 = 120.0;
+const GRAPH_VALUE_RANGE: f64 = 2.0;
 
 /// What a scrub is changing.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,12 +45,25 @@ struct Scrub {
     step: f64,
 }
 
+/// A curve handle being dragged in the graph editor.
+struct CurveDrag {
+    target: SetKeyframeEasing,
+    /// 0: the handle leaving the first key, 1: the one entering the next.
+    handle: usize,
+    start: Point<Pixels>,
+    start_easing: Easing,
+}
+
 /// The selected element, copied out of the editor for one render.
 struct Selected {
     element: ElementRef,
     name: String,
     kind: ElementKind,
+    /// The params at the playhead, keyframes applied.
     params: ParamValues,
+    animations: Option<Animations>,
+    /// The playhead, relative to the element and clamped into it.
+    local_time: MediaTime,
     retime: Option<RetimeConfig>,
     source_audio: Option<SourceAudio>,
 }
@@ -54,9 +77,15 @@ enum SourceAudio {
 /// Edits the selected element: transform, blending, audio and speed. Every
 /// change is an editor command, so it is undoable and the preview follows;
 /// a scrub drag folds into one undo step.
+///
+/// Values show at the playhead. The diamond after a param keys it there
+/// (or removes that key); once a param has keys, edits set a key at the
+/// playhead. Keyed numbers get a curve graph for the segment under the
+/// playhead, with easing presets and draggable handles.
 pub(crate) struct Inspector {
     workspace: Entity<Workspace>,
     scrub: Option<Scrub>,
+    curve_drag: Option<CurveDrag>,
     _workspace_changed: Subscription,
 }
 
@@ -66,6 +95,7 @@ impl Inspector {
         Self {
             workspace,
             scrub: None,
+            curve_drag: None,
             _workspace_changed: workspace_changed,
         }
     }
@@ -95,11 +125,14 @@ impl Inspector {
                 .map(|_| SourceAudio::Extract),
             _ => None,
         };
+        let local_time = local_time(editor, element);
         Ok(Selected {
             element: element_ref.clone(),
             name: element.base().name.clone(),
             kind: element.kind(),
-            params: element.base().params.clone(),
+            params: element.base().params_at(local_time),
+            animations: element.base().animations.clone(),
+            local_time,
             retime: element.retime().cloned(),
             source_audio,
         })
@@ -120,9 +153,62 @@ impl Inspector {
         coalesce: bool,
         cx: &mut Context<Self>,
     ) {
-        let mut command = SetElementParam::new(element.clone(), key, value);
-        let key = coalesce.then(|| command.coalesce_key());
-        self.run(&mut command, key, cx);
+        let editor = self.workspace.read(cx).editor();
+        let animated_at = editor.tracks().element(element).and_then(|target| {
+            has_keyframes(target.base().animations.as_ref(), key)
+                .then(|| local_time(editor, target))
+        });
+        if let Some(time) = animated_at {
+            let mut command = UpsertKeyframe::new(element.clone(), key, time, value);
+            let key = coalesce.then(|| command.coalesce_key());
+            self.run(&mut command, key, cx);
+        } else {
+            let mut command = SetElementParam::new(element.clone(), key, value);
+            let key = coalesce.then(|| command.coalesce_key());
+            self.run(&mut command, key, cx);
+        }
+    }
+
+    /// Keys `key` at the playhead, or removes the key there.
+    fn toggle_keyframe(&mut self, selected: &Selected, key: &'static str, cx: &mut Context<Self>) {
+        let value = selected.params.get(key).cloned();
+        match key_at(selected, key) {
+            Some(keyframe_id) => self.run(
+                &mut RemoveKeyframe {
+                    element: selected.element.clone(),
+                    path: key.to_owned(),
+                    keyframe_id,
+                    value_at_playhead: value,
+                },
+                None,
+                cx,
+            ),
+            None => {
+                let Some(value) = value else {
+                    return;
+                };
+                let mut command =
+                    UpsertKeyframe::new(selected.element.clone(), key, selected.local_time, value);
+                self.run(&mut command, None, cx);
+            }
+        }
+    }
+
+    fn curve_drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.curve_drag else {
+            return;
+        };
+        let dx = f64::from(f32::from(position.x - drag.start.x) / GRAPH_SIZE);
+        let dy = -f64::from(f32::from(position.y - drag.start.y) / GRAPH_SIZE) * GRAPH_VALUE_RANGE;
+        let mut easing = drag.start_easing;
+        let (x, y) = (drag.handle * 2, drag.handle * 2 + 1);
+        easing[x] = (easing[x] + dx).clamp(0.0, 1.0);
+        easing[y] += dy;
+        drag.target.easing = easing;
+        let key = drag.target.coalesce_key();
+        self.workspace.update(cx, |workspace, cx| {
+            workspace.execute_coalescing(&mut drag.target, &key, cx);
+        });
     }
 
     fn set_speed(
@@ -184,7 +270,7 @@ impl Inspector {
     }
 
     fn end_scrub(&mut self, cx: &mut Context<Self>) {
-        if self.scrub.take().is_some() {
+        if self.scrub.take().is_some() | self.curve_drag.take().is_some() {
             self.workspace
                 .update(cx, |workspace, _| workspace.end_coalescing());
         }
@@ -230,7 +316,49 @@ impl Inspector {
         row
     }
 
+    /// A param's control followed by its keyframe toggle.
     fn param_row(
+        &self,
+        selected: &Selected,
+        param: &ParamDefinition,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = param.key;
+        let keyed = key_at(selected, key).is_some();
+        let animated = has_keyframes(selected.animations.as_ref(), key);
+        let element = selected.element.clone();
+        let toggle = Button::new(
+            SharedString::from(format!("key-{key}")),
+            if keyed { "◆" } else { "◇" },
+        )
+        .variant(if animated {
+            ButtonVariant::Secondary
+        } else {
+            ButtonVariant::Ghost
+        })
+        .size(ButtonSize::IconXSmall)
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if let Ok(selected) = this.selected(cx)
+                && selected.element == element
+            {
+                this.toggle_keyframe(&selected, key, cx);
+            }
+        }));
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.param_control(selected, param, cx)),
+            )
+            .child(toggle)
+            .into_any_element()
+    }
+
+    fn param_control(
         &self,
         selected: &Selected,
         param: &ParamDefinition,
@@ -413,11 +541,184 @@ impl Inspector {
                     .into_any_element(),
             );
         }
+        rows.extend(self.curve_section(selected, cx));
         if selected.kind.is_retimable() {
             rows.extend(self.speed_section(selected, cx));
         }
         rows
     }
+
+    /// The graph editor: per keyed number, the segment under the playhead.
+    fn curve_section(&self, selected: &Selected, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut rows = Vec::new();
+        for (path, data) in selected.animations.iter().flatten() {
+            let ChannelData::Leaf(Channel::Scalar(channel)) = data else {
+                continue;
+            };
+            let Some(keyframe_id) = segment_at(channel, selected.local_time) else {
+                continue;
+            };
+            if rows.is_empty() {
+                rows.push(section_header("Curves"));
+            }
+            let target = |easing: Easing| SetKeyframeEasing {
+                element: selected.element.clone(),
+                path: path.clone(),
+                component: "value".to_owned(),
+                keyframe_id: keyframe_id.clone(),
+                easing,
+            };
+            let easing = segment_easing(channel, &keyframe_id);
+            let presets = EASING_PRESETS.iter().enumerate().fold(
+                div().flex().flex_wrap().gap(px(4.0)),
+                |row, (index, (label, preset))| {
+                    let command = target(*preset);
+                    let active = easing.is_some_and(|easing| {
+                        easing.iter().zip(preset).all(|(a, b)| (a - b).abs() < 0.02)
+                    });
+                    row.child(
+                        Button::new(SharedString::from(format!("ease-{path}-{index}")), *label)
+                            .variant(if active {
+                                ButtonVariant::Default
+                            } else {
+                                ButtonVariant::Outline
+                            })
+                            .size(ButtonSize::XSmall)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.run(&mut command.clone(), None, cx);
+                            })),
+                    )
+                },
+            );
+            rows.push(
+                div()
+                    .pt(px(4.0))
+                    .text_xs()
+                    .child(Label::new(path.clone()).muted())
+                    .into_any_element(),
+            );
+            if let Some(easing) = easing {
+                rows.push(self.curve_graph(easing, &target, cx));
+            }
+            rows.push(presets.into_any_element());
+        }
+        rows
+    }
+
+    /// The easing curve with its two handles; drag a handle to reshape it.
+    fn curve_graph(
+        &self,
+        easing: Easing,
+        target: &dyn Fn(Easing) -> SetKeyframeEasing,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let [x1, y1, x2, y2] = easing;
+        let handles = [(x1, y1), (x2, y2)]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (x, y))| {
+                let (left, top) = graph_point(x, y);
+                let target = target(easing);
+                div()
+                    .absolute()
+                    .left(left - px(5.0))
+                    .top(top - px(5.0))
+                    .size(px(10.0))
+                    .rounded_full()
+                    .bg(gpui::white())
+                    .border_1()
+                    .border_color(gpui::black())
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.curve_drag = Some(CurveDrag {
+                                target: target.clone(),
+                                handle: index,
+                                start: event.position,
+                                start_easing: easing,
+                            });
+                            // Re-render so the window-level drag listeners attach.
+                            cx.notify();
+                        }),
+                    )
+            });
+        let graph = canvas(
+            |_, _, _| {},
+            move |bounds, (), window, _| {
+                let colors = window.theme().colors;
+                window.paint_quad(fill(bounds, colors.background));
+                let at = |x: f64, y: f64| {
+                    let (left, top) = graph_point(x, y);
+                    point(bounds.origin.x + left, bounds.origin.y + top)
+                };
+                let mut lines = PathBuilder::stroke(px(1.0));
+                lines.move_to(at(0.0, 0.0));
+                lines.line_to(at(x1, y1));
+                lines.move_to(at(1.0, 1.0));
+                lines.line_to(at(x2, y2));
+                if let Ok(path) = lines.build() {
+                    window.paint_path(path, colors.muted_foreground);
+                }
+                let mut curve = PathBuilder::stroke(px(2.0));
+                curve.move_to(at(0.0, 0.0));
+                curve.cubic_bezier_to(at(1.0, 1.0), at(x1, y1), at(x2, y2));
+                if let Ok(path) = curve.build() {
+                    window.paint_path(path, colors.primary);
+                }
+            },
+        )
+        .absolute()
+        .inset_0();
+        div()
+            .relative()
+            .size(px(GRAPH_SIZE))
+            .my(px(4.0))
+            .child(graph)
+            .children(handles)
+            .into_any_element()
+    }
+}
+
+/// An easing point `(x, y)` in graph pixels from the top left.
+#[allow(clippy::cast_possible_truncation)]
+fn graph_point(x: f64, y: f64) -> (Pixels, Pixels) {
+    (
+        px(x as f32 * GRAPH_SIZE),
+        px((1.0 - (y + 0.5) / GRAPH_VALUE_RANGE) as f32 * GRAPH_SIZE),
+    )
+}
+
+/// `element`'s playhead, relative to it and clamped into it.
+fn local_time(editor: &Editor, element: &Element) -> MediaTime {
+    (editor.playback().position - element.start_time())
+        .clamp(MediaTime::ZERO, element.base().duration)
+}
+
+/// The id of `key`'s keyframe at the playhead, if there is one.
+fn key_at(selected: &Selected, key: &str) -> Option<String> {
+    let data = selected.animations.as_ref()?.get(key)?;
+    data.channels().into_iter().find_map(|(_, channel)| {
+        channel
+            .key_times()
+            .into_iter()
+            .find(|(_, time)| *time == selected.local_time)
+            .map(|(id, _)| id.to_owned())
+    })
+}
+
+/// The first key of the segment under `time`: the last segment past the
+/// end, the first before the start. `None` with fewer than two keys.
+fn segment_at(channel: &ScalarChannel, time: MediaTime) -> Option<String> {
+    let channel = channel.normalized();
+    let mut found = None;
+    for pair in channel.keys.windows(2) {
+        found = Some(pair[0].id.clone());
+        if time < pair[1].time {
+            break;
+        }
+    }
+    found
 }
 
 fn section_of(key: &str) -> &'static str {
@@ -498,7 +799,7 @@ impl Render for Inspector {
         // While a scrub is on, follow the pointer anywhere in the window
         // (the panel's own listeners only fire while it's hovered).
         let this = cx.entity().downgrade();
-        let scrubbing = self.scrub.is_some();
+        let scrubbing = self.scrub.is_some() || self.curve_drag.is_some();
         let follow = canvas(
             move |_, _, _| this,
             move |_, this, window, _| {
@@ -508,7 +809,13 @@ impl Render for Inspector {
                 let moved = this.clone();
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
                     if phase == DispatchPhase::Capture {
-                        let _ = moved.update(cx, |this, cx| this.scrub_to(event.position.x, cx));
+                        let _ = moved.update(cx, |this, cx| {
+                            if this.curve_drag.is_some() {
+                                this.curve_drag_to(event.position, cx);
+                            } else {
+                                this.scrub_to(event.position.x, cx);
+                            }
+                        });
                     }
                 });
                 window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
