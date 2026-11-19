@@ -24,24 +24,11 @@ const APP_NAME: &str = "OpenCut";
 
 /// The app's key bindings. `secondary` is Cmd on macOS and Ctrl elsewhere.
 pub(crate) fn bind_keys(cx: &mut App) {
-    // Editing shortcuts, undo/redo and paste: see `actions::SHORTCUTS`.
+    // Editing and playback shortcuts, undo/redo and paste: see `actions::SHORTCUTS`.
     crate::actions::bind_keys(cx);
     cx.bind_keys([
         KeyBinding::new("secondary-i", ImportMedia, None),
         KeyBinding::new("secondary-shift-o", CloseProject, None),
-        // Classic playback shortcuts.
-        KeyBinding::new("space", Transport::TogglePlay, None),
-        KeyBinding::new("k", Transport::TogglePlay, None),
-        KeyBinding::new("shift-space", Transport::StopPlayback, None),
-        KeyBinding::new("l", Transport::SeekForward, None),
-        KeyBinding::new("j", Transport::SeekBackward, None),
-        KeyBinding::new("right", Transport::FrameStepForward, None),
-        KeyBinding::new("left", Transport::FrameStepBackward, None),
-        KeyBinding::new("shift-right", Transport::JumpForward, None),
-        KeyBinding::new("shift-left", Transport::JumpBackward, None),
-        KeyBinding::new("home", Transport::GotoStart, None),
-        KeyBinding::new("enter", Transport::GotoStart, None),
-        KeyBinding::new("end", Transport::GotoEnd, None),
         KeyBinding::new("backspace", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
         KeyBinding::new("delete", RemoveSelectedMedia, Some(BROWSER_KEY_CONTEXT)),
     ]);

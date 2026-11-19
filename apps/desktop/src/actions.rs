@@ -10,7 +10,7 @@ use gpui::{Action, App, ClipboardItem, Div, Entity, KeyBinding, Stateful, action
 use opencut_editor::EditorAction;
 
 use crate::shell::{Paste, Redo, Undo};
-use crate::workspace::Workspace;
+use crate::workspace::{Transport, Workspace};
 
 actions!(
     opencut,
@@ -153,6 +153,66 @@ pub(crate) const SHORTCUTS: &[Shortcut] = &[
         category: "Help",
         keys: &["secondary-/"],
         bind: |keys| KeyBinding::new(keys, ShowShortcuts, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Play or pause",
+        category: "Playback",
+        keys: &["space", "k"],
+        bind: |keys| KeyBinding::new(keys, Transport::TogglePlay, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Stop playback",
+        category: "Playback",
+        keys: &["shift-space"],
+        bind: |keys| KeyBinding::new(keys, Transport::StopPlayback, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Seek forward 1 s",
+        category: "Playback",
+        keys: &["l"],
+        bind: |keys| KeyBinding::new(keys, Transport::SeekForward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Seek backward 1 s",
+        category: "Playback",
+        keys: &["j"],
+        bind: |keys| KeyBinding::new(keys, Transport::SeekBackward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Step one frame forward",
+        category: "Playback",
+        keys: &["right"],
+        bind: |keys| KeyBinding::new(keys, Transport::FrameStepForward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Step one frame backward",
+        category: "Playback",
+        keys: &["left"],
+        bind: |keys| KeyBinding::new(keys, Transport::FrameStepBackward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Jump forward 5 s",
+        category: "Playback",
+        keys: &["shift-right"],
+        bind: |keys| KeyBinding::new(keys, Transport::JumpForward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Jump backward 5 s",
+        category: "Playback",
+        keys: &["shift-left"],
+        bind: |keys| KeyBinding::new(keys, Transport::JumpBackward, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Go to start",
+        category: "Playback",
+        keys: &["home", "enter"],
+        bind: |keys| KeyBinding::new(keys, Transport::GotoStart, Some(BINDING_CONTEXT)),
+    },
+    Shortcut {
+        description: "Go to end",
+        category: "Playback",
+        keys: &["end"],
+        bind: |keys| KeyBinding::new(keys, Transport::GotoEnd, Some(BINDING_CONTEXT)),
     },
 ];
 
