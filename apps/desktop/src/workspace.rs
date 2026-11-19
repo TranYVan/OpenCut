@@ -263,6 +263,18 @@ impl Workspace {
         }
     }
 
+    /// Selects every timeline element. Not undoable.
+    pub(crate) fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.editor.select_all();
+        cx.notify();
+    }
+
+    /// Copies the selected elements to the editor's clipboard (not the
+    /// system's). Returns `false` when nothing is selected.
+    pub(crate) fn copy_selection(&mut self) -> bool {
+        self.editor.copy_selection()
+    }
+
     pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
         if self.editor.undo() {
             self.changed(cx);

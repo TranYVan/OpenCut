@@ -1,12 +1,18 @@
 //! Built-in edit commands. Each is a plain struct; run it with
 //! [`Editor::execute`](crate::Editor::execute).
 
+mod audio;
+mod bookmarks;
+mod clipboard;
 mod elements;
 mod media;
 mod properties;
 mod settings;
 mod tracks;
 
+pub use audio::{ToggleElementsMuted, ToggleSourceAudio};
+pub use bookmarks::ToggleBookmark;
+pub use clipboard::{Clipboard, ClipboardItem, PasteElements};
 pub use elements::{
     DEFAULT_ELEMENT_DURATION, DeleteElements, DuplicateElements, Edge, ElementMove, InsertElement,
     MoveElements, Placement, SetElementTiming, SplitElements, SplitRetain, ToggleElementsHidden,

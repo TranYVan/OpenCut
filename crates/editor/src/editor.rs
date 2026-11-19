@@ -3,6 +3,7 @@ use opencut_model::time::MediaTime;
 use opencut_model::{Project, SceneTracks, TimelineViewState, ValidationError};
 
 use crate::command::{Command, Outcome};
+use crate::commands::Clipboard;
 use crate::error::EditError;
 use crate::playback::Playback;
 use crate::ripple::{apply_ripple_adjustments, compute_ripple_adjustments};
@@ -34,6 +35,8 @@ pub struct Editor {
     playback: Playback,
     undo_stack: Vec<HistoryEntry>,
     redo_stack: Vec<HistoryEntry>,
+    /// Copied elements. Outside the undo history, see [`Clipboard`].
+    pub(crate) clipboard: Clipboard,
     revision: u64,
     pub snapping_enabled: bool,
     pub ripple_enabled: bool,
@@ -52,6 +55,7 @@ impl Editor {
             playback: Playback::default(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            clipboard: Clipboard::default(),
             revision: 0,
             snapping_enabled: true,
             ripple_enabled: false,
