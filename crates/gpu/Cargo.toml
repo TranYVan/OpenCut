@@ -1,0 +1,15 @@
+[package]
+name = "opencut-gpu"
+description = "OpenCut GPU context on wgpu: device, shared samplers and pipelines, texture readback"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "opencut_gpu"
+
+[dependencies]
+bytemuck = { workspace = true }
+pollster = { workspace = true }
+thiserror = { workspace = true }
+wgpu = { workspace = true }

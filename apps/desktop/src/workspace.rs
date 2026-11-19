@@ -106,7 +106,6 @@ impl Workspace {
     /// The timeline's saved zoom and scroll; `None` for a project whose
     /// timeline view was never saved. The playhead is
     /// `editor().playback().position`, restored on open.
-    #[allow(dead_code)] // For the timeline panel.
     pub(crate) fn timeline_view(&self) -> Option<&TimelineViewState> {
         self.editor.timeline_view_state()
     }
@@ -114,7 +113,6 @@ impl Workspace {
     /// Records the timeline's zoom and horizontal scroll (pixels) so they're
     /// saved with the project. Not undoable. Call it whenever the timeline
     /// zooms or scrolls; saving is debounced.
-    #[allow(dead_code)] // For the timeline panel.
     pub(crate) fn set_timeline_view(
         &mut self,
         zoom_level: f64,
@@ -134,7 +132,6 @@ impl Workspace {
 
     /// Moves the playhead (snapped to a frame, clamped to the scene). Where
     /// it ends up is saved with the project.
-    #[allow(dead_code)] // For the timeline panel.
     pub(crate) fn seek(&mut self, time: MediaTime, cx: &mut Context<Self>) {
         let before = self.editor.playback().position;
         self.editor.seek(time);
@@ -298,7 +295,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
+    pub(crate) fn execute(&mut self, command: &mut dyn Command, cx: &mut Context<Self>) {
         if let Err(error) = self.editor.execute(command) {
             self.notice = Some(format!("{}: {error}", command.label()).into());
         }

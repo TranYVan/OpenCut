@@ -13,14 +13,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use crate::ffi;
 
 use super::RgbaImage;
-use super::raw::Frame;
+use crate::raw::Frame;
 
 pub(super) const BITS: u32 = 10;
-
-/// `AVFMT_GLOBALHEADER` and `AVIO_FLAG_WRITE`, outside the bindgen
-/// allowlist.
-const AVFMT_GLOBALHEADER: i32 = 0x0040;
-const AVIO_FLAG_WRITE: i32 = 2;
 
 pub(super) struct Clip {
     pub width: i32,
@@ -88,7 +83,7 @@ impl Clip {
             // Fixed quantiser, near lossless: stripes stay crisp.
             c.flags |= ffi::AV_CODEC_FLAG_QSCALE as i32;
             c.global_quality = 3 * ffi::FF_QP2LAMBDA as i32;
-            if (*(*output).oformat).flags & AVFMT_GLOBALHEADER != 0 {
+            if (*(*output).oformat).flags & ffi::AVFMT_GLOBALHEADER as i32 != 0 {
                 c.flags |= ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
             }
             ok(ffi::avcodec_open2(context, codec, ptr::null_mut()));
@@ -102,7 +97,7 @@ impl Clip {
             ok(ffi::avio_open(
                 &mut (*output).pb,
                 c_path.as_ptr(),
-                AVIO_FLAG_WRITE,
+                ffi::AVIO_FLAG_WRITE as i32,
             ));
             ok(ffi::avformat_write_header(output, ptr::null_mut()));
 

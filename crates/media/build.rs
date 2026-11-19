@@ -142,7 +142,7 @@ fn generate_bindings(include: &Path, out_dir: &Path) {
         .clang_arg(format!("-I{}", include.display()))
         .allowlist_function("(av|avcodec|avformat|avio|sws|swr)_.*")
         .allowlist_type("(AV|Sws|Swr).*")
-        .allowlist_var("(AV|FF|LIBAV|SWS|SWR)_.*")
+        .allowlist_var("(AV|AVSEEK|AVFMT|AVIO|FF|LIBAV|SWS|SWR)_.*")
         // Deprecated API FFmpeg marks for removal; keeps the bindings to
         // what the current major supports.
         .blocklist_function(".*_deprecated.*")

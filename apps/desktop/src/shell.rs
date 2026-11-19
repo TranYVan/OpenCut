@@ -59,12 +59,11 @@ impl EditorPanels {
     fn new(workspace: Entity<Workspace>, cx: &mut App) -> Self {
         let waveform_dir = workspace.read(cx).files().cache_dir().join("waveforms");
         let thumbnails = Arc::new(MediaThumbnails::new(waveform_dir));
-        let browser_workspace = workspace.clone();
         Self {
-            browser: cx.new(|cx| Browser::new(browser_workspace, thumbnails, cx)),
+            browser: cx.new(|cx| Browser::new(workspace.clone(), thumbnails.clone(), cx)),
             preview: cx.new(|_| Preview),
             inspector: cx.new(|_| Inspector),
-            timeline: cx.new(|_| Timeline),
+            timeline: cx.new(|cx| Timeline::new(workspace.clone(), thumbnails, cx)),
             workspace,
         }
     }

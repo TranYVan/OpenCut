@@ -10,7 +10,8 @@ use crate::ffi;
 use crate::format::Input;
 
 use super::VideoFrame;
-use super::raw::{AVSEEK_FLAG_BACKWARD, CodecContext, Frame, Packet, Scaler, check};
+use super::raw::Scaler;
+use crate::raw::{CodecContext, Frame, Packet, Threads, check};
 
 /// How far ahead of the last decoded frame a request may be and still be
 /// reached by decoding forward rather than seeking, when the container has
@@ -105,7 +106,7 @@ impl VideoDecoder {
         let stream = input.streams()[stream_index];
 
         // SAFETY: `stream` belongs to the open input.
-        let codec = unsafe { CodecContext::open_decoder(stream)? };
+        let codec = unsafe { CodecContext::open_decoder(stream, Threads::PerCore)? };
 
         // Skip demuxing streams nobody reads.
         for (index, &other) in input.streams().iter().enumerate() {
@@ -308,7 +309,7 @@ impl VideoDecoder {
                 self.input.as_mut_ptr(),
                 self.stream_index as i32,
                 timestamp,
-                AVSEEK_FLAG_BACKWARD,
+                ffi::AVSEEK_FLAG_BACKWARD as i32,
             )
         };
         check("av_seek_frame", code)?;
@@ -331,7 +332,7 @@ impl VideoDecoder {
             let entry = ffi::avformat_index_get_entry_from_timestamp(
                 stream,
                 self.time_to_pts(time),
-                AVSEEK_FLAG_BACKWARD,
+                ffi::AVSEEK_FLAG_BACKWARD as i32,
             );
             if entry.is_null() {
                 return None;

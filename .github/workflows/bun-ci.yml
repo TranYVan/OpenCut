@@ -35,13 +35,17 @@ jobs:
           auto-install: true
           auto-setup: true
 
-      # GPUI links X11/Wayland libraries on Linux; bindgen needs libclang.
+      # GPUI links X11/Wayland libraries on Linux; bindgen needs libclang;
+      # mesa-vulkan-drivers gives the GPU-less runner lavapipe, a software
+      # Vulkan adapter for the compositor's golden-image tests.
       - name: Install Linux system libraries
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libxcb1-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libfontconfig-dev libvulkan1 libclang-dev
+            libwayland-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers libclang-dev
+          # With lavapipe installed, a missing adapter is a bug, not a skip.
+          echo "OPENCUT_REQUIRE_GPU=1" >> "$GITHUB_ENV"
 
       # FFmpeg for crates/media: a prebuilt download, or a source build where
       # none is pinned (macOS), so worth keeping between runs.

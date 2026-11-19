@@ -19,6 +19,7 @@ opencut-media = { workspace = true }
 opencut-project-store = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 tempfile = "3"
 
 # Compile Metal shaders at runtime instead of in gpui's build.rs, so building

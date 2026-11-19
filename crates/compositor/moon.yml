@@ -1,0 +1,28 @@
+$schema: 'https://moonrepo.dev/schemas/project.json'
+
+language: 'rust'
+layer: 'library'
+
+fileGroups:
+  sources:
+    - 'src/**/*'
+    - 'tests/**/*'
+    - 'Cargo.toml'
+    - '/Cargo.toml'
+    - '/Cargo.lock'
+
+tasks:
+  # --all-features builds `MediaSources` too, which links FFmpeg.
+  check:
+    command: 'cargo check -p opencut-compositor --all-targets --all-features'
+    deps: ['media:setup']
+    inputs:
+      - '@group(sources)'
+
+  # GPU tests skip with a message when there is no adapter at all; on Linux
+  # CI installs lavapipe (mesa-vulkan-drivers), Windows has WARP.
+  test:
+    command: 'cargo test -p opencut-compositor --all-features'
+    deps: ['media:setup']
+    inputs:
+      - '@group(sources)'

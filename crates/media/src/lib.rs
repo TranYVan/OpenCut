@@ -13,6 +13,7 @@ mod error;
 mod ffi;
 mod format;
 mod probe;
+mod raw;
 pub mod video;
 
 pub use audio::{
