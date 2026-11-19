@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, Context, Entity, ExternalPaths, FocusHandle, Hsla, MouseButton, MouseDownEvent,
-    ObjectFit, RenderImage, Subscription, Window, actions, div, img, prelude::*, px, relative,
-    transparent_black,
+    ObjectFit, RenderImage, SharedString, Subscription, Window, actions, div, img, prelude::*, px,
+    relative, transparent_black,
 };
 use opencut_editor::model::{MediaAsset, MediaType};
 
@@ -276,6 +276,13 @@ impl Browser {
                     this.open_menu(Some(&menu_id), event, window, cx);
                 }),
             )
+            .on_drag(
+                DraggedAsset {
+                    id: asset.id.clone(),
+                    name: asset.name.clone().into(),
+                },
+                |asset, _, _, cx| cx.new(|_| asset.clone()),
+            )
             .child(tile)
             .child(
                 div()
@@ -285,6 +292,29 @@ impl Browser {
                     .child(asset.name.clone()),
             )
             .into_any_element()
+    }
+}
+
+/// An asset being dragged out of the Browser; the Timeline takes the drop.
+#[derive(Clone)]
+pub(crate) struct DraggedAsset {
+    pub(crate) id: String,
+    name: SharedString,
+}
+
+impl Render for DraggedAsset {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = window.theme();
+        div()
+            .px(px(8.0))
+            .py(px(4.0))
+            .rounded(theme.radius)
+            .border_1()
+            .border_color(theme.colors.border)
+            .bg(theme.colors.popover)
+            .text_xs()
+            .text_color(theme.colors.popover_foreground)
+            .child(self.name.clone())
     }
 }
 

@@ -54,6 +54,46 @@ pub(crate) fn track_rows(kinds: impl IntoIterator<Item = TrackKind>) -> (Vec<Row
     (rows, top + CONTENT_BOTTOM_PADDING)
 }
 
+/// The row under content y `y`, or the nearest one when `y` is in a gap or
+/// past either end. `None` without rows.
+pub(crate) fn nearest_row(rows: &[RowLayout], y: f64) -> Option<usize> {
+    let distance = |row: &RowLayout| (row.top - y).max(y - row.bottom()).max(0.0);
+    (0..rows.len()).min_by(|a, b| distance(&rows[*a]).total_cmp(&distance(&rows[*b])))
+}
+
+/// The row whose extent contains content y `y`.
+pub(crate) fn row_at(rows: &[RowLayout], y: f64) -> Option<usize> {
+    rows.iter().position(|row| row.top <= y && y < row.bottom())
+}
+
+/// Whether the ranges `a` and `b` overlap; either may be reversed.
+pub(crate) fn ranges_overlap(a: (f64, f64), b: (f64, f64)) -> bool {
+    a.0.min(a.1) < b.0.max(b.1) && b.0.min(b.1) < a.0.max(a.1)
+}
+
+/// Pixels per frame to auto-scroll while dragging at `position` along a
+/// viewport `length` pixels long: up to [`AUTO_SCROLL_MAX`] back when
+/// within [`AUTO_SCROLL_EDGE`] of the start (or past it), forward near the
+/// end, else zero.
+pub(crate) fn auto_scroll_speed(position: f64, length: f64) -> f64 {
+    let ramp = |depth: f64| (depth / AUTO_SCROLL_EDGE).clamp(0.0, 1.0) * AUTO_SCROLL_MAX;
+    if length <= 2.0 * AUTO_SCROLL_EDGE {
+        return 0.0;
+    }
+    if position < AUTO_SCROLL_EDGE {
+        -ramp(AUTO_SCROLL_EDGE - position)
+    } else if position > length - AUTO_SCROLL_EDGE {
+        ramp(position - (length - AUTO_SCROLL_EDGE))
+    } else {
+        0.0
+    }
+}
+
+/// Width of the band at each viewport edge that auto-scrolls a drag.
+const AUTO_SCROLL_EDGE: f64 = 40.0;
+/// Fastest auto-scroll, pixels per frame.
+const AUTO_SCROLL_MAX: f64 = 20.0;
+
 /// The on-screen part of a horizontal span. All values are in viewport
 /// pixels except `offset`, which is how far into the span (from its start)
 /// the visible part begins.
@@ -220,5 +260,30 @@ mod tests {
         assert_eq!(source_range(10.0, 1.0, span, 50.0), (11.0, 13.0));
         assert_eq!(source_range(10.0, 2.0, span, 50.0), (12.0, 16.0));
         assert_eq!(source_range(4.0, 1.0, span, 0.0), (4.0, 4.0));
+    }
+
+    #[test]
+    fn pointer_rows_and_boxes() {
+        let (rows, _) = track_rows([TrackKind::Text, TrackKind::Video]);
+        let gap = rows[0].bottom() + TRACK_GAP / 2.0 - 1.0;
+        assert_eq!(row_at(&rows, rows[1].top + 1.0), Some(1));
+        assert_eq!(row_at(&rows, gap), None);
+        assert_eq!(nearest_row(&rows, gap), Some(0));
+        assert_eq!(nearest_row(&rows, -50.0), Some(0));
+        assert_eq!(nearest_row(&rows, 1e6), Some(1));
+        assert_eq!(nearest_row(&[], 0.0), None);
+
+        assert!(ranges_overlap((0.0, 10.0), (12.0, 5.0)));
+        assert!(!ranges_overlap((0.0, 10.0), (10.0, 20.0)));
+    }
+
+    #[test]
+    fn auto_scroll_ramps_up_at_the_edges() {
+        assert_eq!(auto_scroll_speed(500.0, 1000.0), 0.0);
+        assert!(auto_scroll_speed(30.0, 1000.0) < 0.0);
+        assert!(auto_scroll_speed(0.0, 1000.0) < auto_scroll_speed(30.0, 1000.0));
+        assert_eq!(auto_scroll_speed(-100.0, 1000.0), -AUTO_SCROLL_MAX);
+        assert_eq!(auto_scroll_speed(2000.0, 1000.0), AUTO_SCROLL_MAX);
+        assert_eq!(auto_scroll_speed(0.0, 50.0), 0.0);
     }
 }

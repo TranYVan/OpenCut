@@ -7,7 +7,7 @@ use gpui::{
 };
 use opencut_editor::commands::{AddMediaAsset, RemoveMediaAssets};
 use opencut_editor::model::time::MediaTime;
-use opencut_editor::model::{MediaAsset, Project, TimelineViewState};
+use opencut_editor::model::{ElementRef, MediaAsset, Project, TimelineViewState};
 use opencut_editor::{Batch, Command, Editor};
 use opencut_project_store::{ProjectStore, StoreError};
 
@@ -247,6 +247,14 @@ impl Workspace {
             return;
         }
         self.execute(&mut RemoveMediaAssets { asset_ids }, cx);
+    }
+
+    /// Replaces the timeline element selection. Not undoable.
+    pub(crate) fn set_selection(&mut self, elements: Vec<ElementRef>, cx: &mut Context<Self>) {
+        if self.editor.selection().elements() != elements.as_slice() {
+            self.editor.selection_mut().set(elements);
+            cx.notify();
+        }
     }
 
     pub(crate) fn undo(&mut self, cx: &mut Context<Self>) {
