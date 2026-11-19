@@ -43,7 +43,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libxcb1-dev libx11-xcb-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libfontconfig-dev libvulkan1 mesa-vulkan-drivers libclang-dev
+            libwayland-dev libfontconfig-dev libasound2-dev libvulkan1 mesa-vulkan-drivers libclang-dev
           # With lavapipe installed, a missing adapter is a bug, not a skip.
           echo "OPENCUT_REQUIRE_GPU=1" >> "$GITHUB_ENV"
 

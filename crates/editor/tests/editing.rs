@@ -531,6 +531,38 @@ fn seeking_snaps_to_frames_and_stays_in_bounds() {
 }
 
 #[test]
+fn playback_controls_follow_the_clock_and_stop_at_the_end() {
+    let mut editor = editor();
+    // Nothing to play on an empty scene.
+    editor.play();
+    assert!(!editor.playback().playing);
+
+    insert(&mut editor, video("a", 0.0, 2.0));
+    editor.seek_by(secs(1.0));
+    assert_eq!(editor.playback().position, secs(1.0));
+    editor.seek_by(secs(-5.0));
+    assert_eq!(editor.playback().position, MediaTime::ZERO);
+
+    editor.play();
+    assert!(editor.playback().playing);
+    // The clock reads mid-frame: the frame being shown wins.
+    assert!(editor.advance_to(secs(1.01)));
+    assert_eq!(editor.playback().position, secs(1.0));
+    // Reaching the end pauses on the last position.
+    assert!(!editor.advance_to(secs(2.0)));
+    assert_eq!(editor.playback().position, secs(2.0));
+    assert!(!editor.playback().playing);
+
+    // Playing from the end restarts; stop rewinds.
+    editor.play();
+    assert_eq!(editor.playback().position, MediaTime::ZERO);
+    editor.seek_by(secs(1.0));
+    editor.stop();
+    assert!(!editor.playback().playing);
+    assert_eq!(editor.playback().position, MediaTime::ZERO);
+}
+
+#[test]
 fn edits_a_classic_project() {
     let json = include_str!("../../model/tests/fixtures/classic-v31.json");
     let project: Project = serde_json::from_str(json).unwrap();

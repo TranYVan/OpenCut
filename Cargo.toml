@@ -9,6 +9,7 @@ members = [
   'crates/gpu',
   'crates/compositor',
   'crates/project-store',
+  'crates/playback',
 ]
 
 [workspace.package]
@@ -34,3 +35,4 @@ opencut-media = { path = "crates/media" }
 opencut-gpu = { path = "crates/gpu" }
 opencut-compositor = { path = "crates/compositor" }
 opencut-project-store = { path = "crates/project-store" }
+opencut-playback = { path = "crates/playback" }

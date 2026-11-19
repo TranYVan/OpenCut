@@ -3,6 +3,7 @@ use gpui::{
     WindowOptions,
 };
 
+mod audio;
 mod components;
 mod media;
 mod panels;
