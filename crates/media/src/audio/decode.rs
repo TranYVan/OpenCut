@@ -2,11 +2,11 @@
 
 use std::path::Path;
 
-use super::raw::{CodecContext, Frame, Packet};
 use super::resample::Resampler;
 use crate::MediaError;
 use crate::ffi;
 use crate::format::Input;
+use crate::raw::{CodecContext, Frame, Packet, Threads};
 
 /// A PCM layout: sample rate and channel count. Samples are always
 /// interleaved `f32` in `[-1, 1]` (louder sources can exceed that).
@@ -108,7 +108,7 @@ impl AudioDecoder {
             })?;
         let stream = input.streams()[index];
         // SAFETY: stream belongs to the open input.
-        let codec = unsafe { CodecContext::open_decoder(stream) }?;
+        let codec = unsafe { CodecContext::open_decoder(stream, Threads::Single) }?;
 
         // SAFETY: an opened codec context.
         let (rate, channels) = unsafe {
