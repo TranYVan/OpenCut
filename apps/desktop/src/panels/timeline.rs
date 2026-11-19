@@ -3,6 +3,12 @@
 //! scroll with the wheel (Shift for horizontal), click or drag on the ruler
 //! to seek.
 //!
+//! Editing with the mouse: click, Shift/Cmd-click or drag a box on empty
+//! space to select; drag elements to move them in time and between tracks,
+//! drag their edges to trim; drop Browser assets to insert them; right-click
+//! for delete, duplicate and split at the playhead. Drags auto-scroll at
+//! the edges, and each one is a single editor command (one undo step).
+//!
 //! Zoom and scroll are view state and live here; the project, the playhead
 //! and the track toggles live in the editor and change through
 //! [`Workspace`].
@@ -14,27 +20,35 @@ mod scale;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::{
-    AnyElement, Bounds, Context, Entity, Hsla, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ObjectFit, Pixels, RenderImage, ScrollWheelEvent, Subscription, Window, canvas, div, fill, img,
-    point, prelude::*, px, size,
+    AnyElement, App, Bounds, Context, DispatchPhase, Entity, Hsla, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, ScrollWheelEvent,
+    Subscription, Task, Window, canvas, div, fill, img, point, prelude::*, px, size,
 };
-use opencut_editor::commands::{ToggleTrackMute, ToggleTrackVisibility};
+use opencut_editor::Command;
+use opencut_editor::commands::{
+    DeleteElements, DuplicateElements, Edge, InsertElement, MoveElements, Placement,
+    SetElementTiming, SplitElements, ToggleTrackMute, ToggleTrackVisibility,
+};
 use opencut_editor::model::time::{FrameRate, MediaTime, TimeCodeFormat, format_timecode};
 use opencut_editor::model::{
     Element, ElementKind, ElementRef, MediaAsset, MediaType, RetimeConfig, Track, TrackKind,
 };
 use opencut_media::{WaveformCache, WaveformSummary};
 
-use crate::components::{Button, ButtonSize, ButtonVariant, Label};
+use crate::components::{
+    Button, ButtonSize, ButtonVariant, ContextMenu, ContextMenuItem, ContextMenuItemVariant, Label,
+};
 use crate::media::{Thumbnail, ThumbnailProvider};
+use crate::panels::DraggedAsset;
 use crate::theme::{ActiveTheme, SemanticColors};
 use crate::workspace::Workspace;
 
 use layout::{
-    HEADER_WIDTH, RULER_HEIGHT, RowLayout, VisibleSpan, source_range, tile_offsets, track_rows,
-    visible_span,
+    HEADER_WIDTH, RULER_HEIGHT, RowLayout, VisibleSpan, auto_scroll_speed, nearest_row,
+    ranges_overlap, row_at, snap_to_edges, source_range, tile_offsets, track_rows, visible_span,
 };
 use ruler::{format_label, ruler_config, ruler_ticks};
 use scale::{
@@ -54,6 +68,48 @@ const WAVEFORM_GAP: f64 = 1.0;
 /// Pixels per "line" of a line-based (non-precise) scroll wheel.
 const WHEEL_LINE_HEIGHT: f32 = 20.0;
 const TOOLBAR_HEIGHT: f32 = 36.0;
+/// How far the pointer must travel before a press becomes a drag.
+const DRAG_THRESHOLD: f64 = 3.0;
+/// Width of the grab area at each end of an element for trimming.
+const EDGE_HANDLE: f64 = 6.0;
+/// How close (px) a moved clip's edge must get to a neighbour's to snap to it.
+const EDGE_SNAP: f64 = 8.0;
+/// Auto-scroll tick while a drag rests at an edge (about 60 fps).
+const AUTO_SCROLL_TICK: Duration = Duration::from_millis(16);
+
+/// A mouse drag in the tracks area, from press to release.
+struct DragState {
+    kind: DragKind,
+    /// Where it started, in content pixels (see [`Timeline::content_point`]).
+    origin: (f64, f64),
+    /// The pointer now, in window coordinates.
+    pointer: Point<Pixels>,
+    /// Moved past [`DRAG_THRESHOLD`]: a drag, not a click.
+    active: bool,
+}
+
+enum DragKind {
+    /// Moves the selection, `anchor` following the pointer. `click_select`:
+    /// the anchor was already selected, so a plain click selects only it.
+    Move {
+        anchor: ElementRef,
+        click_select: bool,
+    },
+    Trim {
+        element: ElementRef,
+        edge: Edge,
+    },
+    /// Box selection, added to `base`.
+    Select {
+        base: Vec<ElementRef>,
+    },
+}
+
+/// The command a drag would run if released now.
+enum Planned {
+    Move(MoveElements),
+    Trim(SetElementTiming),
+}
 
 /// What a media-backed element draws, per asset.
 enum MediaPreview {
@@ -81,6 +137,11 @@ pub(crate) struct Timeline {
     viewport: Bounds<Pixels>,
     /// Dragging on the ruler moves the playhead.
     scrubbing: bool,
+    /// The element, edge or box drag in progress.
+    drag: Option<DragState>,
+    /// Scrolls while a drag rests at an edge; dropping it stops.
+    auto_scroll: Option<Task<()>>,
+    context_menu: Entity<ContextMenu>,
     /// What the panel last drew, to re-render only when it changes.
     seen_project: Option<String>,
     seen_revision: u64,
@@ -95,6 +156,21 @@ impl Timeline {
         cx: &mut Context<Self>,
     ) -> Self {
         let workspace_changed = cx.observe(&workspace, |this, _, cx| this.sync(cx));
+        let weak = cx.entity().downgrade();
+        let item = |label: &'static str, edit: fn(&mut Self, &mut Context<Self>)| {
+            let this = weak.clone();
+            ContextMenuItem::entry(label).on_select(move |_, cx| {
+                let _ = this.update(cx, edit);
+            })
+        };
+        let context_menu = cx.new(|_| {
+            ContextMenu::new([
+                item("Split at playhead", Self::split_selection),
+                item("Duplicate", Self::duplicate_selection),
+                ContextMenuItem::separator(),
+                item("Delete", Self::delete_selection).variant(ContextMenuItemVariant::Destructive),
+            ])
+        });
         let mut this = Self {
             workspace,
             thumbnail_provider,
@@ -104,6 +180,9 @@ impl Timeline {
             scroll_y: 0.0,
             viewport: Bounds::default(),
             scrubbing: false,
+            drag: None,
+            auto_scroll: None,
+            context_menu,
             seen_project: None,
             seen_revision: 0,
             seen_position: MediaTime::ZERO,
@@ -296,6 +375,376 @@ impl Timeline {
         let time = px_to_time(content_x, self.zoom);
         self.workspace
             .update(cx, |workspace, cx| workspace.seek(time, cx));
+    }
+
+    /// A window position in content pixels: x from the timeline's start, y
+    /// from the top of the track rows (both after scrolling).
+    fn content_point(&self, position: Point<Pixels>) -> (f64, f64) {
+        (
+            f64::from(position.x - self.viewport.origin.x) + self.scroll_x,
+            f64::from(position.y - self.viewport.origin.y) - RULER_HEIGHT + self.scroll_y,
+        )
+    }
+
+    fn set_selection(&self, elements: Vec<ElementRef>, cx: &mut Context<Self>) {
+        self.workspace
+            .update(cx, |workspace, cx| workspace.set_selection(elements, cx));
+        cx.notify();
+    }
+
+    fn execute(&self, command: &mut dyn Command, cx: &mut Context<Self>) {
+        self.workspace
+            .update(cx, |workspace, cx| workspace.execute(command, cx));
+    }
+
+    fn start_drag(&mut self, kind: DragKind, position: Point<Pixels>, cx: &mut Context<Self>) {
+        self.drag = Some(DragState {
+            kind,
+            origin: self.content_point(position),
+            pointer: position,
+            active: false,
+        });
+        cx.notify();
+    }
+
+    /// Press on an element: Shift or Cmd/Ctrl toggles it in the selection,
+    /// otherwise it's selected (keeping the selection it's part of, so the
+    /// group can be dragged). Then a move drag starts.
+    fn press_element(
+        &mut self,
+        element: ElementRef,
+        event: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let mut selection = self.workspace.read(cx).editor().selection().clone();
+        let selected = selection.contains(&element);
+        if event.modifiers.shift || event.modifiers.secondary() {
+            selection.toggle(element.clone());
+            self.set_selection(selection.elements().to_vec(), cx);
+            if selected {
+                return;
+            }
+        } else if !selected {
+            self.set_selection(vec![element.clone()], cx);
+        }
+        let click_select = selected && !event.modifiers.modified();
+        self.start_drag(
+            DragKind::Move {
+                anchor: element,
+                click_select,
+            },
+            event.position,
+            cx,
+        );
+    }
+
+    fn press_edge(
+        &mut self,
+        element: ElementRef,
+        edge: Edge,
+        event: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_selection(vec![element.clone()], cx);
+        self.start_drag(DragKind::Trim { element, edge }, event.position, cx);
+    }
+
+    /// Press on empty track space: seeks, clears the selection (unless
+    /// Shift is held) and starts a box selection.
+    fn press_empty(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        self.seek_to(event.position.x, cx);
+        let base = if event.modifiers.shift {
+            self.workspace
+                .read(cx)
+                .editor()
+                .selection()
+                .elements()
+                .to_vec()
+        } else {
+            Vec::new()
+        };
+        self.set_selection(base.clone(), cx);
+        self.start_drag(DragKind::Select { base }, event.position, cx);
+    }
+
+    /// Right-click on an element selects it unless it's already selected,
+    /// then opens the menu for the selection.
+    fn open_menu(&mut self, element: ElementRef, event: &MouseDownEvent, cx: &mut Context<Self>) {
+        if !self
+            .workspace
+            .read(cx)
+            .editor()
+            .selection()
+            .contains(&element)
+        {
+            self.set_selection(vec![element], cx);
+        }
+        self.context_menu
+            .update(cx, |menu, cx| menu.open(event.position, cx));
+    }
+
+    fn drag_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(drag) = &mut self.drag else {
+            return;
+        };
+        drag.pointer = position;
+        if !drag.active {
+            let (x, y) = self.content_point(position);
+            let Some(drag) = &mut self.drag else {
+                return;
+            };
+            drag.active = (x - drag.origin.0).hypot(y - drag.origin.1) > DRAG_THRESHOLD;
+        }
+        self.update_box_selection(cx);
+        if self.auto_scroll.is_none() && self.auto_scroll_delta() != (0.0, 0.0) {
+            self.auto_scroll = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(AUTO_SCROLL_TICK).await;
+                    let scrolling = this
+                        .update(cx, |this, cx| this.auto_scroll_step(cx))
+                        .unwrap_or(false);
+                    if !scrolling {
+                        break;
+                    }
+                }
+            }));
+        }
+        cx.notify();
+    }
+
+    /// How far to auto-scroll this tick for the pointer of an active drag.
+    fn auto_scroll_delta(&self) -> (f64, f64) {
+        let Some(drag) = self.drag.as_ref().filter(|drag| drag.active) else {
+            return (0.0, 0.0);
+        };
+        let x = f64::from(drag.pointer.x - self.viewport.origin.x);
+        let y = f64::from(drag.pointer.y - self.viewport.origin.y) - RULER_HEIGHT;
+        (
+            auto_scroll_speed(x, self.viewport_width()),
+            auto_scroll_speed(y, self.tracks_height()),
+        )
+    }
+
+    /// One auto-scroll tick; `false` once the drag left the edges or ended.
+    fn auto_scroll_step(&mut self, cx: &mut Context<Self>) -> bool {
+        let (dx, dy) = self.auto_scroll_delta();
+        if (dx, dy) == (0.0, 0.0) {
+            self.auto_scroll = None;
+            return false;
+        }
+        let before = (self.scroll_x, self.scroll_y);
+        self.scroll_x += dx;
+        self.scroll_y += dy;
+        self.clamp_scroll(cx);
+        if (self.scroll_x, self.scroll_y) != before {
+            self.save_view(cx);
+            self.update_box_selection(cx);
+            cx.notify();
+        }
+        true
+    }
+
+    /// Selects the box drag's base plus every element the box touches.
+    fn update_box_selection(&self, cx: &mut Context<Self>) {
+        let Some(DragState {
+            kind: DragKind::Select { base },
+            origin,
+            pointer,
+            active: true,
+        }) = &self.drag
+        else {
+            return;
+        };
+        let (x, y) = self.content_point(*pointer);
+        let tracks = self.workspace.read(cx).editor().tracks();
+        let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
+        let mut selection = base.clone();
+        for (track, row) in tracks.iter().zip(&rows) {
+            if !ranges_overlap((row.top, row.bottom()), (origin.1, y)) {
+                continue;
+            }
+            for element in &track.elements {
+                let span = (
+                    time_to_px(element.start_time(), self.zoom),
+                    time_to_px(element.end_time(), self.zoom),
+                );
+                let element = ElementRef::new(&track.id, element.id());
+                if ranges_overlap(span, (origin.0, x)) && !selection.contains(&element) {
+                    selection.push(element);
+                }
+            }
+        }
+        self.set_selection(selection, cx);
+    }
+
+    /// The command the active move or trim drag would run now.
+    fn planned(&self, cx: &App) -> Option<Planned> {
+        let drag = self.drag.as_ref().filter(|drag| drag.active)?;
+        let editor = self.workspace.read(cx).editor();
+        let tracks = editor.tracks();
+        let fps = editor.project().settings.fps;
+        let (x, y) = self.content_point(drag.pointer);
+        let delta = MediaTime::from_seconds_f64((x - drag.origin.0) / pixels_per_second(self.zoom))
+            .unwrap_or(MediaTime::ZERO);
+        match &drag.kind {
+            DragKind::Move { anchor, .. } => {
+                let start = tracks.element(anchor)?.start_time() + delta;
+                let start = start.round_to_frame(fps).unwrap_or(start);
+                let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
+                let target = tracks.iter().nth(nearest_row(&rows, y)?)?;
+                let selection = editor.selection().elements();
+                let moving = |id: &str| {
+                    anchor.element_id == id || selection.iter().any(|e| e.element_id == id)
+                };
+                let edges = target
+                    .elements
+                    .iter()
+                    .filter(|element| !moving(element.id()))
+                    .flat_map(|element| [element.start_time(), element.end_time()]);
+                let anchor_element = tracks.element(anchor)?;
+                let tolerance =
+                    MediaTime::from_seconds_f64(EDGE_SNAP / pixels_per_second(self.zoom))
+                        .unwrap_or(MediaTime::ZERO);
+                let start = snap_to_edges(
+                    start,
+                    anchor_element.end_time() - anchor_element.start_time(),
+                    edges,
+                    tolerance,
+                );
+                MoveElements::drag(tracks, selection, anchor, &target.id, start).map(Planned::Move)
+            }
+            DragKind::Trim { element, edge } => {
+                SetElementTiming::drag_edge(tracks, element, *edge, delta, fps).map(Planned::Trim)
+            }
+            DragKind::Select { .. } => None,
+        }
+    }
+
+    /// Elements drawn somewhere else mid-drag, by id: the track they'd land
+    /// on and how they'd look.
+    fn dragged_elements(&self, cx: &App) -> HashMap<String, (String, Element)> {
+        let tracks = self.workspace.read(cx).editor().tracks();
+        let moved = |element: &ElementRef, track_id: &str, edit: &dyn Fn(&mut Element)| {
+            let mut copy = tracks.element(element)?.clone();
+            edit(&mut copy);
+            Some((element.element_id.clone(), (track_id.to_owned(), copy)))
+        };
+        match self.planned(cx) {
+            Some(Planned::Move(command)) => command
+                .moves
+                .iter()
+                .filter_map(|planned| {
+                    moved(&planned.element, &planned.target_track_id, &|copy| {
+                        copy.base_mut().start_time = planned.start_time;
+                    })
+                })
+                .collect(),
+            Some(Planned::Trim(timing)) => {
+                moved(&timing.element, &timing.element.track_id, &|copy| {
+                    let base = copy.base_mut();
+                    base.start_time = timing.start_time;
+                    base.duration = timing.duration;
+                    base.trim_start = timing.trim_start;
+                    base.trim_end = timing.trim_end;
+                })
+                .into_iter()
+                .collect()
+            }
+            None => HashMap::new(),
+        }
+    }
+
+    /// Release: runs the drag's command, or for a click on an element that
+    /// was part of a group, selects just that element.
+    fn finish_drag(&mut self, cx: &mut Context<Self>) {
+        let planned = self.planned(cx);
+        let Some(drag) = self.drag.take() else {
+            return;
+        };
+        self.auto_scroll = None;
+        let tracks = self.workspace.read(cx).editor().tracks();
+        match planned {
+            Some(Planned::Move(mut command)) => {
+                let unchanged = command.moves.iter().all(|planned| {
+                    planned.target_track_id == planned.element.track_id
+                        && tracks.element(&planned.element).map(Element::start_time)
+                            == Some(planned.start_time)
+                });
+                if !unchanged {
+                    self.execute(&mut command, cx);
+                }
+            }
+            Some(Planned::Trim(mut command)) => self.execute(&mut command, cx),
+            None => {
+                if let DragKind::Move {
+                    anchor,
+                    click_select: true,
+                } = drag.kind
+                    && !drag.active
+                {
+                    self.set_selection(vec![anchor], cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Inserts a Browser asset where it's dropped: on the track under the
+    /// pointer when it fits there, else wherever the editor puts it.
+    fn drop_asset(
+        &mut self,
+        asset: &DraggedAsset,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let (x, y) = self.content_point(position);
+        let editor = self.workspace.read(cx).editor();
+        let Some(asset) = editor.project().media_asset(&asset.id) else {
+            return;
+        };
+        let fps = editor.project().settings.fps;
+        let start = px_to_time(x, self.zoom);
+        let start = start.round_to_frame(fps).unwrap_or(start);
+        let mut command = InsertElement::from_media(asset, start, Placement::Auto);
+        let tracks = editor.tracks();
+        let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
+        let kind = match asset.media_type {
+            MediaType::Audio => TrackKind::Audio,
+            MediaType::Video | MediaType::Image => TrackKind::Video,
+        };
+        if let Some(track) = row_at(&rows, y).and_then(|index| tracks.iter().nth(index))
+            && track.kind == kind
+        {
+            let element = command.element();
+            if track.is_span_free(element.start_time(), element.end_time(), &[]) {
+                command = InsertElement::new(element.clone(), Placement::Track(track.id.clone()));
+            }
+        }
+        self.execute(&mut command, cx);
+    }
+
+    fn selection(&self, cx: &App) -> Vec<ElementRef> {
+        self.workspace
+            .read(cx)
+            .editor()
+            .selection()
+            .elements()
+            .to_vec()
+    }
+
+    fn split_selection(&mut self, cx: &mut Context<Self>) {
+        let at = self.workspace.read(cx).editor().playback().position;
+        self.execute(&mut SplitElements::new(self.selection(cx), at), cx);
+    }
+
+    fn duplicate_selection(&mut self, cx: &mut Context<Self>) {
+        let elements = self.selection(cx);
+        self.execute(&mut DuplicateElements { elements }, cx);
+    }
+
+    fn delete_selection(&mut self, cx: &mut Context<Self>) {
+        let elements = self.selection(cx);
+        self.execute(&mut DeleteElements { elements }, cx);
     }
 
     fn render_toolbar(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
@@ -543,41 +992,137 @@ impl Timeline {
     ) -> Vec<AnyElement> {
         let theme = window.theme();
         let colors = &theme.colors;
-        let editor = self.workspace.read(cx).editor();
-        let project = editor.project();
-        let selection = editor.selection();
-        let width = self.viewport_width();
+        let dragged = self.dragged_elements(cx);
         let mut children = Vec::new();
 
         for (track, row) in tracks.iter().zip(rows) {
             if !self.row_visible(*row) {
                 continue;
             }
-            let top = row.top - self.scroll_y;
             children.push(
                 div()
                     .absolute()
                     .left_0()
                     .right_0()
-                    .top(f(top))
+                    .top(f(row.top - self.scroll_y))
                     .h(f(row.height))
                     .bg(colors.muted.opacity(0.35))
                     .into_any_element(),
             );
             for element in &track.elements {
-                let start = time_to_px(element.start_time(), self.zoom);
-                let end = time_to_px(element.end_time(), self.zoom);
-                let Some(span) = visible_span(start, end, self.scroll_x, width, OVERSCAN) else {
-                    continue;
-                };
-                let asset = element.media_id().and_then(|id| project.media_asset(id));
-                let selected = selection.contains(&ElementRef::new(&track.id, element.id()));
-                children.push(self.render_element(
-                    track, element, asset, span, top, row.height, selected, colors,
+                if !dragged.contains_key(element.id()) {
+                    children.extend(self.place_element(track, *row, element, colors, cx));
+                }
+            }
+        }
+        // Dragged elements last, so they draw over the others.
+        for (track_id, element) in dragged.values() {
+            let Some(index) = tracks.iter().position(|track| &track.id == track_id) else {
+                continue;
+            };
+            if self.row_visible(rows[index]) {
+                children.extend(self.place_element(
+                    tracks[index],
+                    rows[index],
+                    element,
+                    colors,
+                    cx,
                 ));
             }
         }
+        children.extend(self.render_selection_box(colors));
         children
+    }
+
+    /// An element in its row, with the mouse handlers for selecting,
+    /// moving, trimming and the context menu. `None` when off screen.
+    fn place_element(
+        &self,
+        track: &Track,
+        row: RowLayout,
+        element: &Element,
+        colors: &SemanticColors,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let editor = self.workspace.read(cx).editor();
+        let start = time_to_px(element.start_time(), self.zoom);
+        let end = time_to_px(element.end_time(), self.zoom);
+        let span = visible_span(start, end, self.scroll_x, self.viewport_width(), OVERSCAN)?;
+        let asset = element
+            .media_id()
+            .and_then(|id| editor.project().media_asset(id));
+        let element_ref = ElementRef::new(&track.id, element.id());
+        let selected = editor.selection().contains(&element_ref);
+        let top = row.top - self.scroll_y;
+
+        // Trim handles only on edges that are really on screen.
+        let handle = |edge: Edge| {
+            let element_ref = element_ref.clone();
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .w(f(EDGE_HANDLE))
+                .when(edge == Edge::Start, |this| this.left_0())
+                .when(edge == Edge::End, |this| this.right_0())
+                .cursor_col_resize()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.press_edge(element_ref.clone(), edge, event, cx);
+                    }),
+                )
+        };
+        let start_visible = span.offset <= 0.5;
+        let end_visible = span.offset + span.width >= end - start - 0.5;
+        let press_ref = element_ref.clone();
+        let menu_ref = element_ref.clone();
+
+        Some(
+            self.render_element(
+                track, element, asset, span, top, row.height, selected, colors,
+            )
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.press_element(press_ref.clone(), event, cx);
+                }),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.open_menu(menu_ref.clone(), event, cx);
+                }),
+            )
+            .when(start_visible, |this| this.child(handle(Edge::Start)))
+            .when(end_visible, |this| this.child(handle(Edge::End)))
+            .into_any_element(),
+        )
+    }
+
+    /// The rectangle of a box selection in progress.
+    fn render_selection_box(&self, colors: &SemanticColors) -> Option<AnyElement> {
+        let drag = self.drag.as_ref().filter(|drag| drag.active)?;
+        if !matches!(drag.kind, DragKind::Select { .. }) {
+            return None;
+        }
+        let (x, y) = self.content_point(drag.pointer);
+        let (left, top) = (drag.origin.0.min(x), drag.origin.1.min(y));
+        Some(
+            div()
+                .absolute()
+                .left(f(left - self.scroll_x))
+                .top(f(top - self.scroll_y))
+                .w(f((drag.origin.0 - x).abs()))
+                .h(f((drag.origin.1 - y).abs()))
+                .border_1()
+                .border_color(colors.ring)
+                .bg(colors.ring.opacity(0.15))
+                .into_any_element(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -591,7 +1136,7 @@ impl Timeline {
         height: f64,
         selected: bool,
         colors: &SemanticColors,
-    ) -> AnyElement {
+    ) -> gpui::Div {
         let kind = element.kind();
         let accent = kind_color(track.kind, Some(kind), colors);
         let dimmed = track.is_hidden() || element.is_hidden() == Some(true);
@@ -664,7 +1209,6 @@ impl Timeline {
                     .truncate()
                     .child(element.base().name.clone()),
             )
-            .into_any_element()
     }
 }
 
@@ -716,6 +1260,7 @@ impl Render for Timeline {
             });
 
         let this = cx.entity().downgrade();
+        let dragging = self.drag.is_some();
         let measure = canvas(
             move |bounds, _, cx| {
                 let _ = this.update(cx, |this, cx| {
@@ -724,8 +1269,26 @@ impl Render for Timeline {
                         cx.notify();
                     }
                 });
+                this
             },
-            |_, (), _, _| {},
+            // While a drag is on, follow the pointer anywhere in the window
+            // (the panel's own listeners only fire while it's hovered).
+            move |_, this, window, _| {
+                if !dragging {
+                    return;
+                }
+                let moved = this.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = moved.update(cx, |this, cx| this.drag_to(event.position, cx));
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture && event.button == MouseButton::Left {
+                        let _ = this.update(cx, |this, cx| this.finish_drag(cx));
+                    }
+                });
+            },
         )
         .absolute()
         .size_full();
@@ -788,9 +1351,15 @@ impl Render for Timeline {
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, event: &MouseDownEvent, _, cx| {
-                            this.seek_to(event.position.x, cx);
+                            this.press_empty(event, cx);
                         }),
                     )
+                    .drag_over::<DraggedAsset>(|style, _, window, _| {
+                        style.bg(window.theme().colors.accent.opacity(0.3))
+                    })
+                    .on_drop(cx.listener(|this, asset: &DraggedAsset, window, cx| {
+                        this.drop_asset(asset, window.mouse_position(), cx);
+                    }))
                     .children(track_rows),
             )
             .children(playhead);
@@ -829,6 +1398,7 @@ impl Render for Timeline {
                     .child(header_column)
                     .child(timeline_column),
             )
+            .child(self.context_menu.clone())
     }
 }
 

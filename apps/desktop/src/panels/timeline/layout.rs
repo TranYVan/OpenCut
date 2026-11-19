@@ -3,6 +3,7 @@
 //! `timeline/components/layout.ts` (tag `pre-rewrite`).
 
 use opencut_editor::model::TrackKind;
+use opencut_editor::model::time::MediaTime;
 
 /// Height of the ruler strip above the tracks.
 pub(crate) const RULER_HEIGHT: f64 = 24.0;
@@ -53,6 +54,46 @@ pub(crate) fn track_rows(kinds: impl IntoIterator<Item = TrackKind>) -> (Vec<Row
     }
     (rows, top + CONTENT_BOTTOM_PADDING)
 }
+
+/// The row under content y `y`, or the nearest one when `y` is in a gap or
+/// past either end. `None` without rows.
+pub(crate) fn nearest_row(rows: &[RowLayout], y: f64) -> Option<usize> {
+    let distance = |row: &RowLayout| (row.top - y).max(y - row.bottom()).max(0.0);
+    (0..rows.len()).min_by(|a, b| distance(&rows[*a]).total_cmp(&distance(&rows[*b])))
+}
+
+/// The row whose extent contains content y `y`.
+pub(crate) fn row_at(rows: &[RowLayout], y: f64) -> Option<usize> {
+    rows.iter().position(|row| row.top <= y && y < row.bottom())
+}
+
+/// Whether the ranges `a` and `b` overlap; either may be reversed.
+pub(crate) fn ranges_overlap(a: (f64, f64), b: (f64, f64)) -> bool {
+    a.0.min(a.1) < b.0.max(b.1) && b.0.min(b.1) < a.0.max(a.1)
+}
+
+/// Pixels per frame to auto-scroll while dragging at `position` along a
+/// viewport `length` pixels long: up to [`AUTO_SCROLL_MAX`] back when
+/// within [`AUTO_SCROLL_EDGE`] of the start (or past it), forward near the
+/// end, else zero.
+pub(crate) fn auto_scroll_speed(position: f64, length: f64) -> f64 {
+    let ramp = |depth: f64| (depth / AUTO_SCROLL_EDGE).clamp(0.0, 1.0) * AUTO_SCROLL_MAX;
+    if length <= 2.0 * AUTO_SCROLL_EDGE {
+        return 0.0;
+    }
+    if position < AUTO_SCROLL_EDGE {
+        -ramp(AUTO_SCROLL_EDGE - position)
+    } else if position > length - AUTO_SCROLL_EDGE {
+        ramp(position - (length - AUTO_SCROLL_EDGE))
+    } else {
+        0.0
+    }
+}
+
+/// Width of the band at each viewport edge that auto-scrolls a drag.
+const AUTO_SCROLL_EDGE: f64 = 40.0;
+/// Fastest auto-scroll, pixels per frame.
+const AUTO_SCROLL_MAX: f64 = 20.0;
 
 /// The on-screen part of a horizontal span. All values are in viewport
 /// pixels except `offset`, which is how far into the span (from its start)
@@ -126,6 +167,24 @@ pub(crate) fn source_range(
     let from = span.offset / pixels_per_second;
     let to = (span.offset + span.width) / pixels_per_second;
     (trim_start + from * rate, trim_start + to * rate)
+}
+
+/// Shifts `start` so the span's start or end lands on the nearest edge within
+/// `tolerance`. Clip ends are rarely on a frame, so frame rounding alone
+/// never lets two clips touch.
+pub(crate) fn snap_to_edges(
+    start: MediaTime,
+    duration: MediaTime,
+    edges: impl IntoIterator<Item = MediaTime>,
+    tolerance: MediaTime,
+) -> MediaTime {
+    let abs = |time: MediaTime| time.max(-time);
+    edges
+        .into_iter()
+        .flat_map(|edge| [edge - start, edge - (start + duration)])
+        .filter(|shift| abs(*shift) <= tolerance)
+        .min_by_key(|shift| abs(*shift))
+        .map_or(start, |shift| start + shift)
 }
 
 #[cfg(test)]
@@ -220,5 +279,48 @@ mod tests {
         assert_eq!(source_range(10.0, 1.0, span, 50.0), (11.0, 13.0));
         assert_eq!(source_range(10.0, 2.0, span, 50.0), (12.0, 16.0));
         assert_eq!(source_range(4.0, 1.0, span, 0.0), (4.0, 4.0));
+    }
+
+    #[test]
+    fn pointer_rows_and_boxes() {
+        let (rows, _) = track_rows([TrackKind::Text, TrackKind::Video]);
+        let gap = rows[0].bottom() + TRACK_GAP / 2.0 - 1.0;
+        assert_eq!(row_at(&rows, rows[1].top + 1.0), Some(1));
+        assert_eq!(row_at(&rows, gap), None);
+        assert_eq!(nearest_row(&rows, gap), Some(0));
+        assert_eq!(nearest_row(&rows, -50.0), Some(0));
+        assert_eq!(nearest_row(&rows, 1e6), Some(1));
+        assert_eq!(nearest_row(&[], 0.0), None);
+
+        assert!(ranges_overlap((0.0, 10.0), (12.0, 5.0)));
+        assert!(!ranges_overlap((0.0, 10.0), (10.0, 20.0)));
+    }
+
+    #[test]
+    fn auto_scroll_ramps_up_at_the_edges() {
+        assert_eq!(auto_scroll_speed(500.0, 1000.0), 0.0);
+        assert!(auto_scroll_speed(30.0, 1000.0) < 0.0);
+        assert!(auto_scroll_speed(0.0, 1000.0) < auto_scroll_speed(30.0, 1000.0));
+        assert_eq!(auto_scroll_speed(-100.0, 1000.0), -AUTO_SCROLL_MAX);
+        assert_eq!(auto_scroll_speed(2000.0, 1000.0), AUTO_SCROLL_MAX);
+        assert_eq!(auto_scroll_speed(0.0, 50.0), 0.0);
+    }
+
+    #[test]
+    fn snaps_to_the_nearest_edge_within_tolerance() {
+        let t = |s: f64| MediaTime::from_seconds_f64(s).unwrap();
+        // Neighbour ends off-frame at 10.013 s; a drop at 10.0 s snaps to it.
+        assert_eq!(
+            snap_to_edges(t(10.0), t(2.0), [t(10.013)], t(0.1)),
+            t(10.013)
+        );
+        // The end snaps too: 2 s clip ending at 4.95 touches a clip at 5.0.
+        assert_eq!(snap_to_edges(t(2.95), t(2.0), [t(5.0)], t(0.1)), t(3.0));
+        // Nearest wins; out of tolerance leaves the start alone.
+        assert_eq!(
+            snap_to_edges(t(1.0), t(1.0), [t(1.05), t(0.98)], t(0.1)),
+            t(0.98)
+        );
+        assert_eq!(snap_to_edges(t(1.0), t(1.0), [t(3.0)], t(0.1)), t(1.0));
     }
 }
