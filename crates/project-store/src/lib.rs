@@ -17,6 +17,7 @@
 //! and tests run it against a temp dir. Ported from the classic app's
 //! `core/managers/project-manager.ts` (tag `pre-rewrite`).
 
+mod classic;
 mod error;
 mod sort;
 
@@ -225,7 +226,8 @@ fn read_header(file: &Path, dir_name: &str) -> Result<ProjectMetadata, StoreErro
     Ok(header.metadata)
 }
 
-/// Only v31 is read: the classic migrations to it aren't ported.
+/// Only v31 is read; older classic projects come in through
+/// [`ProjectStore::import_classic_zip`], which migrates them.
 fn check_version(version: u32) -> Result<(), StoreError> {
     if version == PROJECT_VERSION {
         Ok(())
@@ -246,6 +248,24 @@ fn clean_name(name: &str) -> Result<String, StoreError> {
 fn truncate_to_millis(time: DateTime<Utc>) -> DateTime<Utc> {
     use chrono::SubsecRound;
     time.trunc_subsecs(3)
+}
+
+/// The file name of an asset's copy in a project's `media/` folder:
+/// `<asset id>.<ext>`, with the original name's extension when it is short
+/// and alphanumeric (lowercased), so it's always a safe file name.
+pub fn media_file_name(id: &str, original_name: &str) -> String {
+    let extension = Path::new(original_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension.len() <= 10
+                && extension.chars().all(|c| c.is_ascii_alphanumeric())
+        });
+    match extension {
+        Some(extension) => format!("{id}.{}", extension.to_ascii_lowercase()),
+        None => id.to_owned(),
+    }
 }
 
 /// Ids become folder names: no separators, no `.`/`..`, nothing hidden.

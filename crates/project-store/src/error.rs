@@ -1,6 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use opencut_model::migrations::MigrationError;
 use opencut_model::{PROJECT_VERSION, ValidationError};
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +16,15 @@ pub enum StoreError {
     UnsupportedVersion(u32),
     #[error("project folder {folder} holds project {file}")]
     IdMismatch { folder: String, file: String },
+    #[error("{} isn't a classic OpenCut export", .0.display())]
+    NotClassicExport(PathBuf),
+    #[error("{0}")]
+    Migration(MigrationError),
+    #[error("{}: {source}", path.display())]
+    Zip {
+        path: PathBuf,
+        source: zip::result::ZipError,
+    },
     #[error("invalid project: {0}")]
     Invalid(ValidationError),
     #[error("{}: {source}", path.display())]
