@@ -2,13 +2,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use gpui::{
-    Context, Entity, ObjectFit, RenderImage, SharedString, Subscription, Window, div, img,
-    prelude::*,
+    Bounds, Context, Entity, ObjectFit, Pixels, RenderImage, SharedString, Subscription, Window,
+    canvas, div, fill, img, point, prelude::*, px, size,
 };
 use opencut_compositor::gpu::GpuContext;
 use opencut_compositor::{MediaSources, Renderer, ScenePlan, build_scene};
-use opencut_editor::model::MediaAsset;
+use opencut_editor::model::{CanvasSize, MediaAsset};
 
+use crate::components::{Button, ButtonSize, ButtonVariant};
 use crate::media::ProjectFiles;
 use crate::theme::ActiveTheme;
 use crate::workspace::Workspace;
@@ -68,6 +69,8 @@ pub(crate) struct Preview {
     plan: Option<ScenePlan>,
     frame: Option<Arc<RenderImage>>,
     error: Option<SharedString>,
+    /// Draws the rule-of-thirds guide over the frame (classic grid guide).
+    show_grid: bool,
     _workspace_changed: Subscription,
 }
 
@@ -81,6 +84,7 @@ impl Preview {
             plan: None,
             frame: None,
             error: None,
+            show_grid: false,
             _workspace_changed: workspace_changed,
         };
         this.update_frame(cx);
@@ -142,10 +146,31 @@ impl Preview {
 }
 
 impl Render for Preview {
-    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = window.theme().colors;
+        let canvas_size = self
+            .workspace
+            .read(cx)
+            .editor()
+            .project()
+            .settings
+            .canvas_size;
+        let line_color = colors.foreground.opacity(0.35);
+        let grid = self.show_grid.then(|| {
+            canvas(
+                |_, _, _| {},
+                move |bounds, (), window, _| {
+                    for line in grid_lines(bounds, canvas_size, 3) {
+                        window.paint_quad(fill(line, line_color));
+                    }
+                },
+            )
+            .absolute()
+            .size_full()
+        });
 
         div()
+            .relative()
             .flex()
             .w_1_2()
             .h_full()
@@ -162,14 +187,71 @@ impl Render for Preview {
                 ),
                 (None, None) => panel,
             })
+            .children(grid)
+            .child(
+                div().absolute().top(px(8.0)).right(px(8.0)).child(
+                    Button::new("preview-grid", "Grid")
+                        .variant(if self.show_grid {
+                            ButtonVariant::Secondary
+                        } else {
+                            ButtonVariant::Ghost
+                        })
+                        .size(ButtonSize::Small)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.show_grid = !this.show_grid;
+                            cx.notify();
+                        })),
+                ),
+            )
     }
+}
+
+/// The 1px lines splitting the canvas, fitted inside `bounds` like the
+/// frame (`ObjectFit::Contain`), into `cells` × `cells`.
+fn grid_lines(bounds: Bounds<Pixels>, canvas: CanvasSize, cells: u32) -> Vec<Bounds<Pixels>> {
+    let (width, height) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let scale = (width / canvas.width as f32).min(height / canvas.height as f32);
+    let (fit_w, fit_h) = (canvas.width as f32 * scale, canvas.height as f32 * scale);
+    let left = f32::from(bounds.origin.x) + (width - fit_w) / 2.0;
+    let top = f32::from(bounds.origin.y) + (height - fit_h) / 2.0;
+    (1..cells)
+        .flat_map(|i| {
+            let t = i as f32 / cells as f32;
+            [
+                Bounds::new(
+                    point(px(left + fit_w * t), px(top)),
+                    size(px(1.0), px(fit_h)),
+                ),
+                Bounds::new(
+                    point(px(left), px(top + fit_h * t)),
+                    size(px(fit_w), px(1.0)),
+                ),
+            ]
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use opencut_editor::model::CanvasSize;
-
     use super::*;
+
+    #[test]
+    fn grid_fits_the_canvas_inside_the_panel() {
+        // A 16:9 canvas in a square panel is letterboxed top and bottom.
+        let panel = Bounds::new(point(px(0.0), px(0.0)), size(px(160.0), px(160.0)));
+        let canvas = CanvasSize {
+            width: 1600,
+            height: 900,
+        };
+        let lines = grid_lines(panel, canvas, 3);
+        assert_eq!(lines.len(), 4);
+        let first_vertical = lines[0];
+        assert_eq!(first_vertical.origin.y, px(35.0));
+        assert_eq!(first_vertical.size.height, px(90.0));
+        let first_horizontal = lines[1];
+        assert_eq!(first_horizontal.origin.y, px(65.0));
+        assert_eq!(first_horizontal.size.width, px(160.0));
+    }
 
     #[test]
     fn renders_the_scene_as_bgra() {

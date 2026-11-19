@@ -11,7 +11,7 @@ use crate::actions::{self, CancelInteraction, ShowShortcuts, clipboard_is_copied
 use crate::components::{Button, ButtonSize, ButtonVariant, Label};
 use crate::media::MediaThumbnails;
 use crate::panels::{
-    BROWSER_KEY_CONTEXT, Browser, Inspector, Preview, RemoveSelectedMedia, Timeline,
+    BROWSER_KEY_CONTEXT, Browser, Inspector, Preview, RemoveSelectedMedia, SceneBar, Timeline,
 };
 use crate::projects::{OpenProject, ProjectsView};
 use crate::shortcuts::ShortcutsDialog;
@@ -52,6 +52,7 @@ struct EditorPanels {
     preview: Entity<Preview>,
     inspector: Entity<Inspector>,
     timeline: Entity<Timeline>,
+    scenes: Entity<SceneBar>,
 }
 
 impl EditorPanels {
@@ -63,6 +64,7 @@ impl EditorPanels {
             preview: cx.new(|cx| Preview::new(workspace.clone(), cx)),
             inspector: cx.new(|cx| Inspector::new(workspace.clone(), cx)),
             timeline: cx.new(|cx| Timeline::new(workspace.clone(), thumbnails, cx)),
+            scenes: cx.new(|cx| SceneBar::new(workspace.clone(), cx)),
             workspace,
         }
     }
@@ -178,6 +180,7 @@ impl Shell {
                     .on_click(cx.listener(|this, _, window, cx| this.close_project(window, cx))),
             )
             .child(Label::new(name))
+            .child(panels.scenes.clone())
             .child(div().flex_1())
             .child(
                 Button::new("show-shortcuts", "Shortcuts")
