@@ -316,6 +316,24 @@ impl Workspace {
         self.changed(cx);
     }
 
+    /// Like [`Workspace::execute`], but repeated calls with the same `key`
+    /// (a drag) fold into one undo step until [`Workspace::end_coalescing`].
+    pub(crate) fn execute_coalescing(
+        &mut self,
+        command: &mut dyn Command,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Err(error) = self.editor.execute_coalescing(command, key) {
+            self.set_notice(format!("{}: {error}", command.label()), cx);
+        }
+        self.changed(cx);
+    }
+
+    pub(crate) fn end_coalescing(&mut self) {
+        self.editor.end_coalescing();
+    }
+
     fn set_notice(&mut self, message: String, cx: &mut Context<Self>) {
         self.notice = Some(message.into());
         self.notice_timer = Some(cx.spawn(async move |this, cx| {

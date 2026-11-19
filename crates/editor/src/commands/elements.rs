@@ -16,7 +16,7 @@ use crate::placement::{
     enforce_main_track_start, find_free_track, highest_insert_index, insert_track,
 };
 
-fn element_mut<'a>(
+pub(super) fn element_mut<'a>(
     tracks: &'a mut SceneTracks,
     element_ref: &ElementRef,
 ) -> Result<&'a mut Element, EditError> {

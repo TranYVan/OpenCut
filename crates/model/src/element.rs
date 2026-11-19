@@ -78,6 +78,19 @@ impl RetimeConfig {
         }
         rate.clamp(Self::MIN_RATE, Self::MAX_RATE)
     }
+
+    /// The config for `rate` (clamped), or `None` for plain 1x playback that
+    /// keeps no pitch (classic speed tab's `buildRetime`).
+    pub fn build(rate: f64, maintain_pitch: bool) -> Option<Self> {
+        let rate = Self::safe_rate(Some(&Self {
+            rate,
+            maintain_pitch: None,
+        }));
+        (rate != Self::DEFAULT_RATE || maintain_pitch).then_some(Self {
+            rate,
+            maintain_pitch: Some(maintain_pitch),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -351,6 +364,16 @@ impl Element {
             Self::Effect(_) | Self::Audio(_) => return false,
         };
         *hidden = Some(value);
+        true
+    }
+
+    /// Sets the retime; returns `false` for kinds that can't be retimed.
+    pub fn set_retime(&mut self, retime: Option<RetimeConfig>) -> bool {
+        match self {
+            Self::Video(element) => element.retime = retime,
+            Self::Audio(element) => element.retime = retime,
+            _ => return false,
+        }
         true
     }
 }

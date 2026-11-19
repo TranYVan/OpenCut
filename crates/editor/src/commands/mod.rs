@@ -3,6 +3,7 @@
 
 mod elements;
 mod media;
+mod properties;
 mod settings;
 mod tracks;
 
@@ -12,5 +13,6 @@ pub use elements::{
     UpdateElement,
 };
 pub use media::{AddMediaAsset, RemoveMediaAssets};
+pub use properties::{SetElementParam, SetElementRetime, ToggleSourceAudioSeparation};
 pub use settings::UpdateProjectSettings;
 pub use tracks::{AddTrack, RemoveTrack, ToggleTrackMute, ToggleTrackVisibility};

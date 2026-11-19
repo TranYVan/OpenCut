@@ -125,3 +125,47 @@ fn missing_or_mismatched_media_is_left_out() {
         vec!["background", "main-video"]
     );
 }
+
+/// The inspector edits params through the model's definitions; every visual
+/// one must reach the layer, and every blend option must parse.
+#[test]
+fn every_visual_param_definition_reaches_the_layer() {
+    use opencut_model::{ElementKind, ParamKind, ParamValue, element_params};
+
+    let mut project = golden_project();
+    let base_layer = build_scene(&project, seconds(0.25)).layers[1].clone();
+
+    for param in element_params(ElementKind::Video) {
+        let value = match &param.kind {
+            ParamKind::Number { min, max, .. } => {
+                ParamValue::Number(max.map_or(*min + 0.5, |max| (min + max) / 2.0 + 0.25))
+            }
+            ParamKind::Select { options, .. } => {
+                for (name, _) in options.iter() {
+                    assert!(name.parse::<BlendMode>().is_ok(), "{name}");
+                }
+                ParamValue::from(options[2].0)
+            }
+            ParamKind::Boolean { .. } => continue,
+        };
+        if param.key == "volume" {
+            continue; // audio only: the scene has no sound
+        }
+        let scene = project.current_scene_mut().unwrap();
+        scene.tracks.main.elements[0]
+            .base_mut()
+            .params
+            .insert(param.key.to_owned(), value);
+        let changed = build_scene(&project, seconds(0.25)).layers[1].clone();
+        assert_ne!(
+            changed, base_layer,
+            "{} does not change the layer",
+            param.key
+        );
+        let scene = project.current_scene_mut().unwrap();
+        scene.tracks.main.elements[0]
+            .base_mut()
+            .params
+            .remove(param.key);
+    }
+}
