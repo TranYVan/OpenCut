@@ -6,7 +6,7 @@
 //! from the classic app's `core/managers` and `commands` (tag `pre-rewrite`).
 
 mod actions;
-mod animation;
+pub mod animation;
 mod command;
 pub mod commands;
 pub mod drop_target;

@@ -37,6 +37,27 @@ fn element_spans_are_half_open() {
 }
 
 #[test]
+fn keyframed_params_follow_the_frame_time() {
+    let mut project = golden_project();
+    let checker = project.scenes[0].tracks.overlay[0]
+        .element_mut("overlay-checker")
+        .unwrap();
+    checker.base_mut().animations = Some(
+        serde_json::from_value(serde_json::json!({
+            "opacity": { "keys": [
+                { "id": "a", "time": 0, "value": 0.0, "segmentToNext": "linear", "tangentMode": "flat" },
+                { "id": "b", "time": seconds(1.0).as_ticks(), "value": 1.0, "segmentToNext": "linear", "tangentMode": "flat" }
+            ] }
+        }))
+        .unwrap(),
+    );
+    // The checker starts at 1.5 s.
+    let opacity = |time| build_scene(&project, seconds(time)).layers[2].opacity;
+    assert_eq!(opacity(2.0), 0.5);
+    assert_eq!(opacity(3.0), 1.0);
+}
+
+#[test]
 fn reads_transform_opacity_and_blend_mode() {
     let project = golden_project();
     let plan = build_scene(&project, seconds(2.5));

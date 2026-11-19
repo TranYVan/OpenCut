@@ -84,6 +84,14 @@ fn reads_a_classic_v31_project() {
     assert_eq!(video.effects.as_ref().unwrap()[0].effect_type, "blur");
     assert_eq!(video.masks.as_ref().unwrap()[0].mask_type, "rectangle");
 
+    let title = tracks
+        .element(&ElementRef::new("track-text", "el-title"))
+        .unwrap();
+    assert_eq!(
+        title.base().params_at(MediaTime::from_ticks(30_000))["opacity"],
+        ParamValue::Number(0.5)
+    );
+
     let whoosh = tracks
         .element(&ElementRef::new("track-audio", "el-whoosh"))
         .unwrap();

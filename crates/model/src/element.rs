@@ -1,17 +1,9 @@
-use std::collections::BTreeMap;
-
 use opencut_time::MediaTime;
 use serde::{Deserialize, Serialize};
 
+use crate::animation::{self, Animations};
 use crate::params::ParamValues;
 use crate::track::TrackKind;
-
-/// Keyframe channels keyed by property path (`transform.positionX`,
-/// `effects.<id>.params.<key>`, …).
-///
-/// Kept as raw JSON until the animation system is ported (roadmap P9), so
-/// classic projects round-trip without losing keyframes.
-pub type Animations = BTreeMap<String, serde_json::Value>;
 
 /// Fields every timeline element has. Times are in ticks; `trim_start` and
 /// `trim_end` are measured in source time, `duration` in timeline time.
@@ -54,6 +46,11 @@ impl ElementBase {
 
     pub fn end_time(&self) -> MediaTime {
         self.start_time + self.duration
+    }
+
+    /// The params `local_time` into the element, keyframes applied.
+    pub fn params_at(&self, local_time: MediaTime) -> ParamValues {
+        animation::params_at(&self.params, self.animations.as_ref(), local_time)
     }
 }
 

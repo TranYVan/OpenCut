@@ -68,9 +68,7 @@ impl Command for SetElementParam {
 /// Sets the playback speed (clamped to 0.01–5x) and whether pitch is kept.
 /// The element's timeline length follows: the visible source span divided by
 /// the new rate. Fails if the longer element would overlap its neighbour.
-///
-/// shortcut: keyframes past a shortened end aren't clamped (classic clamps
-/// them); upgrade with the animation system (P9).
+/// Keyframes past a shortened end are clamped to it.
 pub struct SetElementRetime {
     pub element: ElementRef,
     pub rate: f64,
@@ -110,6 +108,7 @@ impl Command for SetElementRetime {
             .div_f64_round(new_rate)
             .filter(|duration| duration.as_ticks() > 0)
             .ok_or(EditError::InvalidTiming)?;
+        base.animations = animation::clamp_to_duration(base.animations.as_ref(), base.duration);
         element.set_retime(retime);
 
         let track = tracks

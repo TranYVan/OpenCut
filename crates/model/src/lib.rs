@@ -6,6 +6,7 @@
 //! projects can be imported. Pure data: no I/O, no editing rules. Editing
 //! lives in `opencut-editor`.
 
+pub mod animation;
 mod element;
 pub mod migrations;
 mod param_definition;
@@ -14,8 +15,9 @@ mod project;
 mod timestamp;
 mod track;
 
+pub use animation::Animations;
 pub use element::{
-    Animations, AudioElement, AudioSource, Effect, EffectElement, Element, ElementBase,
+    AudioElement, AudioSource, Effect, EffectElement, Element, ElementBase,
     ElementKind, GraphicElement, ImageElement, Mask, RetimeConfig, StickerElement, TextElement,
     VideoElement,
 };

@@ -6,8 +6,11 @@
 //! Editing with the mouse: click, Shift/Cmd-click or drag a box on empty
 //! space to select; drag elements to move them in time and between tracks,
 //! drag their edges to trim; drop Browser assets to insert them; right-click
-//! for delete, duplicate and split at the playhead. Drags auto-scroll at
-//! the edges, and each one is a single editor command (one undo step).
+//! for delete, duplicate and split at the playhead. Keyframes show as
+//! diamonds along an element's bottom edge: click, Shift-click or box them
+//! (the box must reach that lane) to select, drag to retime. Drags
+//! auto-scroll at the edges, and each one is a single editor command (one
+//! undo step).
 //!
 //! Zoom and scroll are view state and live here; the project, the playhead
 //! and the track toggles live in the editor and change through
@@ -27,16 +30,16 @@ use gpui::{
     MouseMoveEvent, MouseUpEvent, ObjectFit, Pixels, Point, RenderImage, ScrollWheelEvent,
     Subscription, Task, Window, canvas, div, fill, img, point, prelude::*, px, size,
 };
-use opencut_editor::Command;
 use opencut_editor::commands::{
     DeleteElements, DuplicateElements, Edge, InsertElement, MoveElements, Placement,
-    SetElementTiming, SplitElements, ToggleTrackMute, ToggleTrackVisibility,
+    RetimeKeyframe, SetElementTiming, SplitElements, ToggleTrackMute, ToggleTrackVisibility,
 };
 use opencut_editor::model::time::{FrameRate, MediaTime, TimeCodeFormat, format_timecode};
 use opencut_editor::model::{
     Element, ElementKind, ElementRef, MediaAsset, MediaType, RetimeConfig, Track, TrackKind,
 };
 use opencut_editor::snapping::{DEFAULT_SNAP_THRESHOLD_PX, snap_group_shift, snap_threshold};
+use opencut_editor::{Batch, Command, animation};
 use opencut_media::{WaveformCache, WaveformSummary};
 
 use crate::components::{
@@ -98,16 +101,53 @@ enum DragKind {
         element: ElementRef,
         edge: Edge,
     },
-    /// Box selection, added to `base`.
+    /// Box selection of elements and keyframes, added to the bases.
     Select {
         base: Vec<ElementRef>,
+        base_keys: Vec<KeyRef>,
     },
+    /// Moves the selected keyframes of `element` in time. `clicked`: the
+    /// keys under the pointer, selected alone on a plain click.
+    Keyframes {
+        element: ElementRef,
+        clicked: Vec<KeyRef>,
+        click_select: bool,
+    },
+}
+
+/// One keyframe: an element, a property path and the key's id.
+#[derive(Clone, Debug, PartialEq)]
+struct KeyRef {
+    element: ElementRef,
+    path: String,
+    id: String,
 }
 
 /// The command a drag would run if released now.
 enum Planned {
     Move(MoveElements),
     Trim(SetElementTiming),
+    /// Each moved keyframe and its new element-relative time.
+    Keyframes(Vec<(KeyRef, MediaTime)>),
+}
+
+/// Height of the keyframe lane at the bottom of an element.
+const KEY_LANE: f64 = 12.0;
+
+/// Every keyframe of `element` as `(path, id, time)`; components of one
+/// property share ids, so each appears once.
+fn element_keys(element: &Element) -> Vec<(String, String, MediaTime)> {
+    let mut keys: Vec<(String, String, MediaTime)> = Vec::new();
+    for (path, data) in element.base().animations.iter().flatten() {
+        for (_, channel) in data.channels() {
+            for (id, time) in channel.key_times() {
+                if !keys.iter().any(|(p, i, _)| p == path && i == id) {
+                    keys.push((path.clone(), id.to_owned(), time));
+                }
+            }
+        }
+    }
+    keys
 }
 
 /// What a media-backed element draws, per asset.
@@ -136,8 +176,10 @@ pub(crate) struct Timeline {
     viewport: Bounds<Pixels>,
     /// Dragging on the ruler moves the playhead.
     scrubbing: bool,
-    /// The element, edge or box drag in progress.
+    /// The element, edge, keyframe or box drag in progress.
     drag: Option<DragState>,
+    /// Selected keyframes; view state, so not undoable.
+    selected_keys: Vec<KeyRef>,
     /// Scrolls while a drag rests at an edge; dropping it stops.
     auto_scroll: Option<Task<()>>,
     context_menu: Entity<ContextMenu>,
@@ -180,6 +222,7 @@ impl Timeline {
             viewport: Bounds::default(),
             scrubbing: false,
             drag: None,
+            selected_keys: Vec::new(),
             auto_scroll: None,
             context_menu,
             seen_project: None,
@@ -428,6 +471,9 @@ impl Timeline {
     ) {
         let mut selection = self.workspace.read(cx).editor().selection().clone();
         let selected = selection.contains(&element);
+        if !event.modifiers.shift {
+            self.selected_keys.clear();
+        }
         if event.modifiers.shift || event.modifiers.secondary() {
             selection.toggle(element.clone());
             self.set_selection(selection.elements().to_vec(), cx);
@@ -473,8 +519,49 @@ impl Timeline {
         } else {
             Vec::new()
         };
+        if !event.modifiers.shift {
+            self.selected_keys.clear();
+        }
+        let base_keys = self.selected_keys.clone();
         self.set_selection(base.clone(), cx);
-        self.start_drag(DragKind::Select { base }, event.position, cx);
+        self.start_drag(DragKind::Select { base, base_keys }, event.position, cx);
+    }
+
+    /// Press on a keyframe diamond (`keys`: every key at that time): Shift
+    /// toggles them in the keyframe selection, otherwise they're selected
+    /// (keeping a selection they're part of, so it can be dragged). The
+    /// element becomes the selection, then a keyframe drag starts.
+    fn press_keyframes(
+        &mut self,
+        element: ElementRef,
+        keys: Vec<KeyRef>,
+        event: &MouseDownEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let selected = keys.iter().all(|key| self.selected_keys.contains(key));
+        if event.modifiers.shift {
+            if selected {
+                self.selected_keys.retain(|key| !keys.contains(key));
+                cx.notify();
+                return;
+            }
+            self.selected_keys.extend(keys.iter().cloned());
+        } else if !selected {
+            self.selected_keys.clone_from(&keys);
+        }
+        // Keyframes of one element move at a time.
+        self.selected_keys.retain(|key| key.element == element);
+        self.set_selection(vec![element.clone()], cx);
+        let click_select = selected && !event.modifiers.shift;
+        self.start_drag(
+            DragKind::Keyframes {
+                element,
+                clicked: keys,
+                click_select,
+            },
+            event.position,
+            cx,
+        );
     }
 
     /// Right-click on an element selects it unless it's already selected,
@@ -554,10 +641,11 @@ impl Timeline {
         true
     }
 
-    /// Selects the box drag's base plus every element the box touches.
-    fn update_box_selection(&self, cx: &mut Context<Self>) {
+    /// Selects the box drag's bases plus every element the box touches and
+    /// every keyframe inside it (the box must reach the keyframe lane).
+    fn update_box_selection(&mut self, cx: &mut Context<Self>) {
         let Some(DragState {
-            kind: DragKind::Select { base },
+            kind: DragKind::Select { base, base_keys },
             origin,
             pointer,
             active: true,
@@ -569,21 +657,38 @@ impl Timeline {
         let tracks = self.workspace.read(cx).editor().tracks();
         let (rows, _) = track_rows(tracks.iter().map(|track| track.kind));
         let mut selection = base.clone();
+        let mut keys = base_keys.clone();
+        let box_x = (origin.0.min(x), origin.0.max(x));
         for (track, row) in tracks.iter().zip(&rows) {
             if !ranges_overlap((row.top, row.bottom()), (origin.1, y)) {
                 continue;
             }
+            let in_lane = ranges_overlap((row.bottom() - KEY_LANE, row.bottom()), (origin.1, y));
             for element in &track.elements {
                 let span = (
                     time_to_px(element.start_time(), self.zoom),
                     time_to_px(element.end_time(), self.zoom),
                 );
-                let element = ElementRef::new(&track.id, element.id());
-                if ranges_overlap(span, (origin.0, x)) && !selection.contains(&element) {
-                    selection.push(element);
+                let element_ref = ElementRef::new(&track.id, element.id());
+                if in_lane {
+                    for (path, id, time) in element_keys(element) {
+                        let key_x = time_to_px(element.start_time() + time, self.zoom);
+                        let key = KeyRef {
+                            element: element_ref.clone(),
+                            path,
+                            id,
+                        };
+                        if (box_x.0..=box_x.1).contains(&key_x) && !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    }
+                }
+                if ranges_overlap(span, (origin.0, x)) && !selection.contains(&element_ref) {
+                    selection.push(element_ref);
                 }
             }
         }
+        self.selected_keys = keys;
         self.set_selection(selection, cx);
     }
 
@@ -632,6 +737,25 @@ impl Timeline {
             DragKind::Trim { element, edge } => {
                 SetElementTiming::drag_edge(tracks, element, *edge, delta, fps).map(Planned::Trim)
             }
+            DragKind::Keyframes { element, .. } => {
+                let target = tracks.element(element)?;
+                let duration = target.base().duration;
+                let moves = element_keys(target)
+                    .into_iter()
+                    .filter_map(|(path, id, time)| {
+                        let key = KeyRef {
+                            element: element.clone(),
+                            path,
+                            id,
+                        };
+                        let moved = time + delta;
+                        let moved = moved.round_to_frame(fps).unwrap_or(moved);
+                        let moved = moved.clamp(MediaTime::ZERO, duration);
+                        (moved != time && self.selected_keys.contains(&key)).then_some((key, moved))
+                    })
+                    .collect();
+                Some(Planned::Keyframes(moves))
+            }
             DragKind::Select { .. } => None,
         }
     }
@@ -666,6 +790,19 @@ impl Timeline {
                 .into_iter()
                 .collect()
             }
+            Some(Planned::Keyframes(moves)) => {
+                let Some((first, _)) = moves.first() else {
+                    return HashMap::new();
+                };
+                moved(&first.element, &first.element.track_id, &|copy| {
+                    let animations = &mut copy.base_mut().animations;
+                    for (key, time) in &moves {
+                        animation::retime(animations, &key.path, &key.id, *time);
+                    }
+                })
+                .into_iter()
+                .collect()
+            }
             None => HashMap::new(),
         }
     }
@@ -691,16 +828,34 @@ impl Timeline {
                 }
             }
             Some(Planned::Trim(mut command)) => self.execute(&mut command, cx),
-            None => {
-                if let DragKind::Move {
-                    anchor,
-                    click_select: true,
-                } = drag.kind
-                    && !drag.active
-                {
-                    self.set_selection(vec![anchor], cx);
+            Some(Planned::Keyframes(moves)) => {
+                let commands: Vec<Box<dyn Command>> = moves
+                    .into_iter()
+                    .map(|(key, time)| {
+                        Box::new(RetimeKeyframe {
+                            element: key.element,
+                            path: key.path,
+                            keyframe_id: key.id,
+                            time,
+                        }) as Box<dyn Command>
+                    })
+                    .collect();
+                if !commands.is_empty() {
+                    self.execute(&mut Batch::new("Move keyframes", commands), cx);
                 }
             }
+            None => match drag.kind {
+                DragKind::Move {
+                    anchor,
+                    click_select: true,
+                } if !drag.active => self.set_selection(vec![anchor], cx),
+                DragKind::Keyframes {
+                    clicked,
+                    click_select: true,
+                    ..
+                } if !drag.active => self.selected_keys = clicked,
+                _ => {}
+            },
         }
         cx.notify();
     }
@@ -1095,6 +1250,53 @@ impl Timeline {
         let press_ref = element_ref.clone();
         let menu_ref = element_ref.clone();
 
+        // One diamond per keyframe time, standing for every key there.
+        let mut key_times: Vec<(MediaTime, Vec<KeyRef>)> = Vec::new();
+        for (path, id, time) in element_keys(element) {
+            let key = KeyRef {
+                element: element_ref.clone(),
+                path,
+                id,
+            };
+            match key_times.iter_mut().find(|(at, _)| *at == time) {
+                Some((_, keys)) => keys.push(key),
+                None => key_times.push((time, vec![key])),
+            }
+        }
+        let diamonds = key_times.into_iter().filter_map(|(time, keys)| {
+            let x = time_to_px(time, self.zoom) - span.offset;
+            if x < -KEY_LANE || x > span.width + KEY_LANE {
+                return None;
+            }
+            let selected = keys.iter().any(|key| self.selected_keys.contains(key));
+            let element_ref = element_ref.clone();
+            Some(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left(f(x - KEY_LANE / 2.0))
+                    .w(f(KEY_LANE))
+                    .h(f(KEY_LANE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(10.0))
+                    .text_color(if selected {
+                        colors.primary
+                    } else {
+                        colors.foreground
+                    })
+                    .child("◆")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.press_keyframes(element_ref.clone(), keys.clone(), event, cx);
+                        }),
+                    ),
+            )
+        });
+
         Some(
             self.render_element(
                 track, element, asset, span, top, row.height, selected, colors,
@@ -1115,6 +1317,7 @@ impl Timeline {
             )
             .when(start_visible, |this| this.child(handle(Edge::Start)))
             .when(end_visible, |this| this.child(handle(Edge::End)))
+            .children(diamonds)
             .into_any_element(),
         )
     }
