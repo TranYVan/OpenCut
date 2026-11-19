@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use opencut_model::time::MediaTime;
+use opencut_model::time::{FrameRate, MediaTime, TICKS_PER_SECOND};
 use opencut_model::{
-    CanvasSize, Element, ElementKind, ElementRef, MediaAsset, MediaType, ParamValues, Project,
-    RetimeConfig, SceneTracks, Track, TrackKind, new_id,
+    AudioElement, AudioSource, CanvasSize, Element, ElementBase, ElementKind, ElementRef,
+    ImageElement, MediaAsset, MediaType, ParamValues, Project, RetimeConfig, SceneTracks, Track,
+    TrackKind, VideoElement, new_id,
 };
 
 use crate::animation;
@@ -42,6 +43,10 @@ fn track_mut<'a>(tracks: &'a mut SceneTracks, track_id: &str) -> Result<&'a mut 
         .ok_or_else(|| EditError::TrackNotFound(track_id.to_owned()))
 }
 
+/// Length of a new element whose media has no duration (classic
+/// `DEFAULT_NEW_ELEMENT_DURATION`).
+pub const DEFAULT_ELEMENT_DURATION: MediaTime = MediaTime::from_ticks(5 * TICKS_PER_SECOND);
+
 /// Where [`InsertElement`] puts the element.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Placement {
@@ -75,8 +80,56 @@ impl InsertElement {
         }
     }
 
+    /// An element playing all of `asset`, starting at `start` (classic
+    /// `buildElementFromMedia`). Media without a duration (images) gets
+    /// [`DEFAULT_ELEMENT_DURATION`].
+    pub fn from_media(asset: &MediaAsset, start: MediaTime, placement: Placement) -> Self {
+        let duration = asset
+            .duration
+            .and_then(MediaTime::from_seconds_f64)
+            .filter(|duration| *duration > MediaTime::ZERO)
+            .unwrap_or(DEFAULT_ELEMENT_DURATION);
+        let mut base = ElementBase::new(new_id(), asset.name.clone(), start, duration);
+        let media_id = asset.id.clone();
+        let element = match asset.media_type {
+            MediaType::Image => Element::Image(ImageElement {
+                base,
+                media_id,
+                hidden: Some(false),
+                effects: None,
+                masks: None,
+            }),
+            MediaType::Video => {
+                base.source_duration = Some(duration);
+                Element::Video(VideoElement {
+                    base,
+                    media_id,
+                    is_source_audio_enabled: Some(true),
+                    hidden: Some(false),
+                    retime: None,
+                    effects: None,
+                    masks: None,
+                })
+            }
+            MediaType::Audio => {
+                base.source_duration = Some(duration);
+                Element::Audio(AudioElement {
+                    base,
+                    source: AudioSource::Upload { media_id },
+                    retime: None,
+                })
+            }
+        };
+        Self::new(element, placement)
+    }
+
     pub fn element_id(&self) -> &str {
         self.element.id()
+    }
+
+    /// The element as it will be inserted (before main-track snapping).
+    pub fn element(&self) -> &Element {
+        &self.element
     }
 
     /// The track the element landed on, once the command has run.
@@ -198,6 +251,84 @@ pub struct MoveElements {
     pub moves: Vec<ElementMove>,
 }
 
+impl MoveElements {
+    /// The move for dragging the `selection` by its `anchor` element so the
+    /// anchor starts at `anchor_start` on `target_track_id` (classic
+    /// `resolveGroupMove` onto existing tracks). Each source track maps to
+    /// one target track: the anchor's to the target, the ones above and
+    /// below it to the nearest unused track of their kind in that
+    /// direction. A target of the wrong kind keeps the anchor on its track.
+    /// The group never starts before zero. `None` when an element isn't
+    /// found or a track has nowhere to go; overlaps are left for `apply` to
+    /// reject.
+    pub fn drag(
+        tracks: &SceneTracks,
+        selection: &[ElementRef],
+        anchor: &ElementRef,
+        target_track_id: &str,
+        anchor_start: MediaTime,
+    ) -> Option<Self> {
+        let display: Vec<&Track> = tracks.iter().collect();
+        let index_of = |track_id: &str| display.iter().position(|track| track.id == track_id);
+        let anchor_element = tracks.element(anchor)?;
+        let anchor_index = index_of(&anchor.track_id)?;
+
+        let mut members: Vec<(&ElementRef, MediaTime, usize)> = Vec::new();
+        for element_ref in std::iter::once(anchor).chain(selection) {
+            if members
+                .iter()
+                .any(|(seen, _, _)| seen.element_id == element_ref.element_id)
+            {
+                continue;
+            }
+            let offset = tracks.element(element_ref)?.start_time() - anchor_element.start_time();
+            members.push((element_ref, offset, index_of(&element_ref.track_id)?));
+        }
+
+        let target_index = index_of(target_track_id)
+            .filter(|index| display[*index].kind == display[anchor_index].kind)
+            .unwrap_or(anchor_index);
+        let mut sources: Vec<usize> = members.iter().map(|(_, _, index)| *index).collect();
+        sources.sort_unstable();
+        sources.dedup();
+        // (source display index, target display index)
+        let mut targets = vec![(anchor_index, target_index)];
+        let free = |source: usize, target: usize, taken: &[(usize, usize)]| {
+            display[target].kind == display[source].kind
+                && !taken.iter().any(|(_, used)| *used == target)
+        };
+        let mut bound = target_index;
+        for &source in sources.iter().rev().filter(|index| **index < anchor_index) {
+            bound = (0..bound).rev().find(|t| free(source, *t, &targets))?;
+            targets.push((source, bound));
+        }
+        let mut bound = target_index;
+        for &source in sources.iter().filter(|index| **index > anchor_index) {
+            bound = (bound + 1..display.len()).find(|t| free(source, *t, &targets))?;
+            targets.push((source, bound));
+        }
+
+        let earliest = members
+            .iter()
+            .map(|(_, offset, _)| *offset)
+            .min()
+            .unwrap_or(MediaTime::ZERO);
+        let anchor_start = anchor_start.max(MediaTime::ZERO - earliest.min(MediaTime::ZERO));
+        let moves = members
+            .iter()
+            .map(|(element_ref, offset, source)| {
+                let (_, target) = targets.iter().find(|(from, _)| from == source)?;
+                Some(ElementMove {
+                    element: (*element_ref).clone(),
+                    target_track_id: display[*target].id.clone(),
+                    start_time: anchor_start + *offset,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self { moves })
+    }
+}
+
 impl Command for MoveElements {
     fn label(&self) -> &'static str {
         "Move"
@@ -277,16 +408,111 @@ pub struct SetElementTiming {
     pub trim_end: MediaTime,
 }
 
+/// Which edge of an element a trim drags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Start,
+    End,
+}
+
+impl SetElementTiming {
+    /// The timing for dragging an element's `edge` by `delta` (classic
+    /// `computeGroupResize` for one element): the delta snaps to a frame
+    /// and is clamped so the element stays at least a frame long and
+    /// doesn't pass a neighbour, time zero, or the ends of its media.
+    /// `None` when the element isn't found.
+    pub fn drag_edge(
+        tracks: &SceneTracks,
+        element_ref: &ElementRef,
+        edge: Edge,
+        delta: MediaTime,
+        fps: FrameRate,
+    ) -> Option<Self> {
+        let element = tracks.element(element_ref)?;
+        let track = tracks.track(&element_ref.track_id)?;
+        let base = element.base();
+        let (start, end) = (base.start_time, base.end_time());
+        let rate = RetimeConfig::safe_rate(element.retime());
+        let to_timeline = |source: MediaTime| source.div_f64_round(rate).unwrap_or(source);
+        let frame = MediaTime::from_frame(1, fps).unwrap_or(MediaTime::from_ticks(1));
+        let others = track
+            .elements
+            .iter()
+            .filter(|other| other.id() != element.id());
+
+        let (min, max) = match edge {
+            Edge::Start => {
+                let neighbour = others
+                    .map(Element::end_time)
+                    .filter(|other_end| *other_end <= start)
+                    .max()
+                    .unwrap_or(MediaTime::ZERO);
+                let mut min = neighbour - start;
+                if base.source_duration.is_some() {
+                    min = min.max(MediaTime::ZERO - to_timeline(base.trim_start));
+                }
+                (min, Some(base.duration - frame))
+            }
+            Edge::End => {
+                let neighbour = others
+                    .map(Element::start_time)
+                    .filter(|other_start| *other_start >= end)
+                    .min()
+                    .map(|other_start| other_start - end);
+                let media = base
+                    .source_duration
+                    .map(|source| to_timeline(source - base.trim_start) - base.duration);
+                let max = match (neighbour, media) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                (frame - base.duration, max)
+            }
+        };
+        let clamp = |time: MediaTime| {
+            let time = time.max(min);
+            max.map_or(time, |max| time.min(max))
+        };
+        let delta = clamp(delta.round_to_frame(fps).unwrap_or(delta));
+        let source_delta = delta.mul_f64_round(rate).unwrap_or(delta);
+
+        Some(match edge {
+            Edge::Start => Self {
+                element: element_ref.clone(),
+                start_time: start + delta,
+                duration: base.duration - delta,
+                trim_start: (base.trim_start + source_delta).max(MediaTime::ZERO),
+                trim_end: base.trim_end,
+            },
+            Edge::End => Self {
+                element: element_ref.clone(),
+                start_time: start,
+                duration: base.duration + delta,
+                trim_start: base.trim_start,
+                trim_end: (base.trim_end - source_delta).max(MediaTime::ZERO),
+            },
+        })
+    }
+}
+
 impl Command for SetElementTiming {
     fn label(&self) -> &'static str {
         "Trim"
     }
 
+    /// On the main track, a start at or before every other element's snaps
+    /// to zero (no leading gap), as classic does for any start-time edit.
     fn apply(&mut self, project: &mut Project) -> Result<Outcome, EditError> {
         let tracks = current_tracks(project)?;
+        let start_time = enforce_main_track_start(
+            tracks,
+            &self.element.track_id,
+            self.start_time,
+            &[self.element.element_id.as_str()],
+        );
         let element = element_mut(tracks, &self.element)?;
         let base = element.base_mut();
-        base.start_time = self.start_time;
+        base.start_time = start_time;
         base.duration = self.duration;
         base.trim_start = self.trim_start;
         base.trim_end = self.trim_end;

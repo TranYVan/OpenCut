@@ -1,5 +1,5 @@
 use opencut_editor::commands::{
-    AddTrack, DeleteElements, DuplicateElements, ElementMove, InsertElement, MoveElements,
+    AddTrack, DeleteElements, DuplicateElements, Edge, ElementMove, InsertElement, MoveElements,
     Placement, RemoveTrack, SetElementTiming, SplitElements, SplitRetain, ToggleElementsHidden,
     ToggleTrackMute, UpdateElement, UpdateProjectSettings,
 };
@@ -619,4 +619,115 @@ fn timeline_view_state_is_saved_but_not_undoable() {
     let reopened = Editor::new(saved.clone()).unwrap();
     assert_eq!(reopened.playback().position, secs(1.5));
     assert_eq!(reopened.project(), &saved);
+}
+
+fn with_source(mut element: Element, source: f64) -> Element {
+    element.base_mut().source_duration = Some(secs(source));
+    element
+}
+
+#[test]
+fn drag_move_maps_each_source_track_to_one_target_track() {
+    let mut editor = editor();
+    let a = insert(&mut editor, video("a", 0.0, 2.0));
+    let top = AddTrack::new(TrackKind::Video);
+    let top_id = top.track_id().to_owned();
+    editor.execute(&mut { top }).unwrap();
+    let middle = AddTrack::new(TrackKind::Video);
+    let middle_id = middle.track_id().to_owned();
+    editor.execute(&mut { middle }).unwrap();
+    // Display order: top, middle, main.
+    let x = ElementRef::new(&middle_id, "x");
+    editor
+        .execute(&mut InsertElement::new(
+            video("x", 1.0, 1.0),
+            Placement::Track(middle_id.clone()),
+        ))
+        .unwrap();
+    let group = [a.clone(), x.clone()];
+    let tracks = editor.tracks().clone();
+
+    // Up one row: a onto middle, x onto the next video track above.
+    let mut up = MoveElements::drag(&tracks, &group, &a, &middle_id, secs(3.0)).unwrap();
+    assert_eq!(
+        up.moves,
+        [
+            ElementMove {
+                element: a.clone(),
+                target_track_id: middle_id.clone(),
+                start_time: secs(3.0),
+            },
+            ElementMove {
+                element: x.clone(),
+                target_track_id: top_id.clone(),
+                start_time: secs(4.0),
+            },
+        ]
+    );
+    editor.execute(&mut up).unwrap();
+    editor.undo();
+
+    // Nothing above the top track for x.
+    assert!(MoveElements::drag(&tracks, &group, &a, &top_id, secs(0.0)).is_none());
+
+    // The group never starts before zero; a text track keeps a on main.
+    let title = insert(&mut editor, text("t", 0.0, 1.0));
+    let tracks = editor.tracks().clone();
+    let moved = MoveElements::drag(
+        &tracks,
+        std::slice::from_ref(&x),
+        &a,
+        &title.track_id,
+        secs(-5.0),
+    )
+    .unwrap();
+    assert_eq!(moved.moves[0].target_track_id, main_id(&editor));
+    assert_eq!(moved.moves[0].start_time, MediaTime::ZERO);
+    assert_eq!(moved.moves[1].start_time, secs(1.0));
+}
+
+#[test]
+fn drag_edge_clamps_to_neighbours_media_and_frames() {
+    let mut editor = editor();
+    let fps = editor.project().settings.fps;
+    let a = insert(&mut editor, with_source(video("a", 0.0, 2.0), 2.0));
+    let b = insert(&mut editor, with_source(video("b", 3.0, 2.0), 4.0));
+    let tracks = editor.tracks().clone();
+    let drag = |element: &ElementRef, edge, delta: f64| {
+        SetElementTiming::drag_edge(&tracks, element, edge, secs(delta), fps).unwrap()
+    };
+
+    // a's end can't reach past its media; b's can, up to its source.
+    assert_eq!(drag(&a, Edge::End, 1.0).duration, secs(2.0));
+    assert_eq!(drag(&b, Edge::End, 5.0).duration, secs(4.0));
+    // Shortening keeps the trims in step and leaves at least a frame.
+    let shorter = drag(&a, Edge::End, -1.0);
+    assert_eq!((shorter.duration, shorter.trim_end), (secs(1.0), secs(1.0)));
+    let tiny = drag(&a, Edge::End, -10.0);
+    assert_eq!(tiny.duration, MediaTime::from_frame(1, fps).unwrap());
+    // b's start stops at a's end and can't go before its media's start.
+    let left = drag(&b, Edge::Start, -5.0);
+    assert_eq!((left.start_time, left.duration), (secs(3.0), secs(2.0)));
+    let right = drag(&b, Edge::Start, 0.5);
+    assert_eq!(
+        (right.start_time, right.duration, right.trim_start),
+        (secs(3.5), secs(1.5), secs(0.5))
+    );
+    // Less than half a frame doesn't move.
+    assert_eq!(drag(&b, Edge::End, 0.01).duration, secs(2.0));
+}
+
+#[test]
+fn trimming_the_first_main_clip_start_keeps_it_at_zero() {
+    let mut editor = editor();
+    let fps = editor.project().settings.fps;
+    let a = insert(&mut editor, with_source(video("a", 0.0, 2.0), 2.0));
+    let mut trim =
+        SetElementTiming::drag_edge(editor.tracks(), &a, Edge::Start, secs(0.5), fps).unwrap();
+    editor.execute(&mut trim).unwrap();
+    let base = element(&editor, &a).base();
+    assert_eq!(
+        (base.start_time, base.duration, base.trim_start),
+        (MediaTime::ZERO, secs(1.5), secs(0.5))
+    );
 }

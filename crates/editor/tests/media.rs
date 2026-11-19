@@ -1,4 +1,6 @@
-use opencut_editor::commands::{AddMediaAsset, InsertElement, Placement, RemoveMediaAssets};
+use opencut_editor::commands::{
+    AddMediaAsset, DEFAULT_ELEMENT_DURATION, InsertElement, Placement, RemoveMediaAssets,
+};
 use opencut_editor::model::time::{FrameRate, MediaTime};
 use opencut_editor::model::{
     AudioElement, AudioSource, CanvasSize, DEFAULT_CANVAS_SIZE, DEFAULT_FPS, Element, ElementBase,
@@ -310,4 +312,39 @@ fn import_and_insert_batch_is_one_undo_step() {
     assert!(editor.project().media_assets.is_empty());
     assert_eq!(editor.tracks().element_count(), 0);
     assert!(!editor.can_undo());
+}
+
+#[test]
+fn elements_from_media_play_the_whole_file() {
+    let mut editor = editor();
+    let assets = [
+        asset("clip", MediaType::Video),
+        asset("still", MediaType::Image),
+        asset("song", MediaType::Audio),
+    ];
+    let mut placed = Vec::new();
+    for asset in &assets {
+        editor
+            .execute(&mut AddMediaAsset {
+                asset: asset.clone(),
+            })
+            .unwrap();
+        let mut insert = InsertElement::from_media(asset, secs(1.0), Placement::Auto);
+        editor.execute(&mut insert).unwrap();
+        placed.push(ElementRef::new(
+            insert.track_id().unwrap(),
+            insert.element_id(),
+        ));
+    }
+    let element = |index: usize| editor.tracks().element(&placed[index]).unwrap();
+
+    // The first clip on the main track starts at zero.
+    assert_eq!(element(0).start_time(), MediaTime::ZERO);
+    assert_eq!(element(0).base().duration, secs(10.0));
+    assert_eq!(element(0).base().source_duration, Some(secs(10.0)));
+    assert_eq!(element(0).base().name, "clip.file");
+    assert_eq!(element(1).base().duration, DEFAULT_ELEMENT_DURATION);
+    assert_eq!(element(1).base().source_duration, None);
+    assert_eq!(element(2).base().duration, secs(30.0));
+    assert_eq!(element(2).media_id(), Some("song"));
 }
