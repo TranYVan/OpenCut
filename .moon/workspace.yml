@@ -6,3 +6,8 @@ projects:
     - 'crates/*'
   sources:
     root: '.'
+
+# Push-to-main runs have no PR base; moon diffs against this branch instead
+# of its default, `master`, which this repo doesn't have.
+vcs:
+  defaultBranch: 'main'
