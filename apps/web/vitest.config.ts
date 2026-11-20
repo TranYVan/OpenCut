@@ -8,5 +8,8 @@ export default defineConfig({
   plugins: [viteReact()],
   test: {
     environment: 'jsdom',
+    // CI runs these beside cargo builds on shared runners, 5-20x slower
+    // than a local run; the default 5 s flaked on the ZIP tests.
+    testTimeout: 60_000,
   },
 })

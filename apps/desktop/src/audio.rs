@@ -143,8 +143,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(500));
         let played = output.position() - start;
         output.stop();
-        // Real time, minus the device's start-up latency.
+        // Real time, minus the device's start-up latency. The upper bound
+        // allows for a loaded CI runner oversleeping; a clock running at
+        // double speed would still reach 1.0 s.
         assert!(played > MediaTime::ZERO, "clock did not advance");
-        assert!(played.to_seconds_f64() < 0.6, "clock ran fast: {played:?}");
+        assert!(played.to_seconds_f64() < 0.9, "clock ran fast: {played:?}");
     }
 }

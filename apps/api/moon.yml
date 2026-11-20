@@ -20,5 +20,7 @@ tasks:
 
   deploy:
     command: 'bun run deploy'
+    options:
+      runInCI: false
     deps:
       - '~:build'
