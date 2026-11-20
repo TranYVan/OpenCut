@@ -51,6 +51,8 @@ pub(super) struct Engine {
     /// Without an audio device the playhead runs off the wall clock.
     wall: Option<(Instant, MediaTime)>,
     active: bool,
+    /// Preview mute: silences the device, playback keeps its clock.
+    muted: bool,
     /// Decoding the project's audio before the session can begin.
     decoding: Option<Task<()>>,
     ticker: Option<Task<()>>,
@@ -76,6 +78,18 @@ impl Workspace {
             Transport::GotoStart => self.seek(MediaTime::ZERO, cx),
             Transport::GotoEnd => self.seek(self.editor.duration(), cx),
         }
+    }
+
+    pub(crate) fn muted(&self) -> bool {
+        self.engine.muted
+    }
+
+    pub(crate) fn toggle_muted(&mut self, cx: &mut Context<Self>) {
+        self.engine.muted = !self.engine.muted;
+        if let Some(Ok(output)) = &self.engine.output {
+            output.set_muted(self.engine.muted);
+        }
+        cx.notify();
     }
 
     pub(crate) fn play(&mut self, cx: &mut Context<Self>) {
@@ -117,6 +131,9 @@ impl Workspace {
                     .inspect_err(|error| eprintln!("no audio, playing silent: {error}"))
             })
             .as_ref();
+        if let Ok(output) = output {
+            output.set_muted(engine.muted);
+        }
         let rate = output.map_or(0, |output| output.sample_rate().min(u32::MAX));
         let files = &self.files;
         let mut missing: Vec<(String, PathBuf)> = Vec::new();

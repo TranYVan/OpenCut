@@ -158,7 +158,14 @@ impl Shell {
         panels: &EditorPanels,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> gpui::AnyElement {
+        if panels.preview.read(cx).fullscreen() {
+            return div()
+                .flex()
+                .size_full()
+                .child(panels.preview.clone())
+                .into_any_element();
+        }
         let colors = window.theme().colors;
         let name = panels.workspace.read(cx).project_name().to_owned();
 
@@ -206,6 +213,7 @@ impl Shell {
                     .child(panels.inspector.clone()),
             )
             .child(panels.timeline.clone())
+            .into_any_element()
     }
 }
 
@@ -264,11 +272,18 @@ impl Render for Shell {
                 this.show_shortcuts = !this.show_shortcuts;
                 cx.notify();
             }))
-            // Esc: close the dialog, else abandon a drag, else deselect.
-            .on_action(cx.listener(|this, _: &CancelInteraction, _, cx| {
+            // Esc: close the dialog, else leave full screen, else abandon a
+            // drag, else deselect.
+            .on_action(cx.listener(|this, _: &CancelInteraction, window, cx| {
                 if this.show_shortcuts {
                     this.show_shortcuts = false;
                     cx.notify();
+                } else if let Screen::Editor(panels) = &this.screen
+                    && panels.preview.read(cx).fullscreen()
+                {
+                    panels
+                        .preview
+                        .update(cx, |preview, cx| preview.toggle_fullscreen(window, cx));
                 } else if let Screen::Editor(panels) = &this.screen {
                     let cancelled = panels
                         .timeline

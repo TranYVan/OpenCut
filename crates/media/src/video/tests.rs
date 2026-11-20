@@ -125,6 +125,27 @@ fn seeks_mix_with_sequential_decoding() {
 }
 
 #[test]
+fn next_frame_continues_after_a_backward_step() {
+    let file = clip().write("backward-next", "mp4");
+    let mut decoder = VideoDecoder::open(&file.0).unwrap();
+    let index = |frame: VideoFrame| i64::from(read_index(&frame.image));
+    let at = |decoder: &mut VideoDecoder, frame: i64| {
+        index(
+            decoder
+                .frame_at(MediaTime::from_ticks(frame * FRAME))
+                .unwrap()
+                .unwrap(),
+        )
+    };
+    assert_eq!(at(&mut decoder, 50), 50);
+    // Served from the frames kept behind 50.
+    assert_eq!(at(&mut decoder, 47), 47);
+    for expected in 48..=53 {
+        assert_eq!(index(decoder.next_frame().unwrap().unwrap()), expected);
+    }
+}
+
+#[test]
 fn scales_frames_on_conversion() {
     let file = clip().write("scaled", "mp4");
     let mut decoder = VideoDecoder::open(&file.0).unwrap();

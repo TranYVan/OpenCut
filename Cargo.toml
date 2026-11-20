@@ -36,3 +36,9 @@ opencut-gpu = { path = "crates/gpu" }
 opencut-compositor = { path = "crates/compositor" }
 opencut-project-store = { path = "crates/project-store" }
 opencut-playback = { path = "crates/playback" }
+
+# Preview playback decodes, composites and copies a frame every ~16 ms; at
+# opt-level 0 that costs ~190 ms per 1080p frame. Optimise everything in dev
+# builds, keeping debug info and overflow checks.
+[profile.dev]
+opt-level = 2

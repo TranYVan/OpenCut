@@ -1,6 +1,7 @@
 //! Frames of a video file at a source time: keyframe seek, then decode
 //! forward (classic `VideoCache`, which did the same through mediabunny).
 
+use std::collections::VecDeque;
 use std::path::Path;
 
 use opencut_time::{FrameRate, MediaTime, TICKS_PER_SECOND};
@@ -20,6 +21,10 @@ const FORWARD_WINDOW: MediaTime = MediaTime::from_ticks(2 * TICKS_PER_SECOND);
 
 /// How often to seek further back when a seek lands after its target.
 const SEEK_RETRIES: u32 = 4;
+
+/// Memory for decoded frames kept behind the current one, so stepping or
+/// scrubbing backward doesn't re-decode from the keyframe every time.
+const HISTORY_BYTES: usize = 384 << 20;
 
 /// Facts about the decoded video stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +87,12 @@ pub struct VideoDecoder {
     current: Option<Decoded>,
     /// The frame after `current`, decoded to learn where `current` ends.
     lookahead: Option<Decoded>,
+    /// Frames decoded just before `current`, oldest first, consecutive in
+    /// presentation order. Emptied by a seek.
+    history: VecDeque<Decoded>,
+    /// Set while the last `frame_at` was answered from `history`: the time
+    /// of that frame, where `next_frame` continues from.
+    viewing: Option<MediaTime>,
     /// Nothing decoded since opening: reading starts at the beginning.
     at_start: bool,
     /// The demuxer is exhausted and the decoder has been told to drain.
@@ -158,6 +169,8 @@ impl VideoDecoder {
             output_size: None,
             current: None,
             lookahead: None,
+            history: VecDeque::new(),
+            viewing: None,
             at_start: true,
             draining: false,
         })
@@ -186,6 +199,17 @@ impl VideoDecoder {
     /// seek to the keyframe before `time` and decode up to it.
     pub fn frame_at(&mut self, time: MediaTime) -> Result<Option<VideoFrame>, MediaError> {
         let time = time.max(MediaTime::ZERO);
+        self.viewing = None;
+        if let Some(index) = self.history_index(time) {
+            self.viewing = Some(self.history[index].time);
+            return convert_decoded(
+                &mut self.scaler,
+                &self.info,
+                self.output_size,
+                &self.history[index],
+            )
+            .map(Some);
+        }
         if self.can_decode_forward_to(time) {
             self.advance_to(time)?;
         } else {
@@ -202,13 +226,28 @@ impl VideoDecoder {
     /// The next frame in presentation order (the first after opening), or
     /// `None` at the end. Continues from wherever [`Self::frame_at`] was.
     pub fn next_frame(&mut self) -> Result<Option<VideoFrame>, MediaError> {
+        if let Some(viewed) = self.viewing.take() {
+            // Continue from a frame served from `history`: the next kept
+            // one, else `current`.
+            if let Some(index) = self.history.iter().position(|frame| frame.time > viewed) {
+                self.viewing = Some(self.history[index].time);
+                return convert_decoded(
+                    &mut self.scaler,
+                    &self.info,
+                    self.output_size,
+                    &self.history[index],
+                )
+                .map(Some);
+            }
+            return self.current_frame();
+        }
         let next = match self.lookahead.take() {
             Some(next) => Some(next),
             None => self.decode_next()?,
         };
         match next {
             Some(next) => {
-                self.current = Some(next);
+                self.set_current(next);
                 self.current_frame()
             }
             None => Ok(None),
@@ -216,24 +255,38 @@ impl VideoDecoder {
     }
 
     fn current_frame(&mut self) -> Result<Option<VideoFrame>, MediaError> {
-        let Some(current) = &self.current else {
-            return Ok(None);
-        };
-        let frame = current.frame.get();
-        let (width, height) = self.output_size.unwrap_or((
-            u32::try_from(frame.width).unwrap_or(0),
-            u32::try_from(frame.height).unwrap_or(0),
-        ));
-        let image = self.scaler.convert(frame, width, height)?;
-        Ok(Some(VideoFrame {
-            index: self
-                .info
-                .frame_rate
-                .map_or(0, |rate| frames_in(current.time, rate, Rounding::Nearest)),
-            time: current.time,
-            duration: current.duration,
-            image,
-        }))
+        match &self.current {
+            Some(current) => {
+                convert_decoded(&mut self.scaler, &self.info, self.output_size, current).map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Makes `next` the current frame, keeping the old one in `history`
+    /// while it fits the memory budget.
+    fn set_current(&mut self, next: Decoded) {
+        if let Some(previous) = self.current.replace(next) {
+            self.history.push_back(previous);
+            // Conservative: 4:2:0 is 1.5 bytes a pixel, other formats more.
+            let frame_bytes = (self.info.width as usize * self.info.height as usize * 2).max(1);
+            let capacity = (HISTORY_BYTES / frame_bytes).max(1);
+            while self.history.len() > capacity {
+                self.history.pop_front();
+            }
+        }
+    }
+
+    /// The history frame showing at `time`, if `time` is before `current`
+    /// and not before the oldest kept frame.
+    fn history_index(&self, time: MediaTime) -> Option<usize> {
+        let current = self.current.as_ref()?;
+        if self.started_by(current.time, time) {
+            return None;
+        }
+        self.history
+            .iter()
+            .rposition(|frame| self.started_by(frame.time, time))
     }
 
     fn can_decode_forward_to(&self, time: MediaTime) -> bool {
@@ -271,7 +324,9 @@ impl VideoDecoder {
             }
             match &self.lookahead {
                 Some(next) if self.started_by(next.time, time) || self.current.is_none() => {
-                    self.current = self.lookahead.take();
+                    if let Some(next) = self.lookahead.take() {
+                        self.set_current(next);
+                    }
                 }
                 _ => return Ok(()),
             }
@@ -317,6 +372,7 @@ impl VideoDecoder {
         unsafe { ffi::avcodec_flush_buffers(self.codec.as_mut_ptr()) };
         self.current = None;
         self.lookahead = None;
+        self.history.clear();
         self.at_start = false;
         self.draining = false;
         Ok(())
@@ -453,6 +509,28 @@ impl VideoDecoder {
             .unwrap_or(i64::MAX)
             .saturating_add(self.start_pts)
     }
+}
+
+fn convert_decoded(
+    scaler: &mut Scaler,
+    info: &VideoInfo,
+    output_size: Option<(u32, u32)>,
+    decoded: &Decoded,
+) -> Result<VideoFrame, MediaError> {
+    let frame = decoded.frame.get();
+    let (width, height) = output_size.unwrap_or((
+        u32::try_from(frame.width).unwrap_or(0),
+        u32::try_from(frame.height).unwrap_or(0),
+    ));
+    let image = scaler.convert(frame, width, height)?;
+    Ok(VideoFrame {
+        index: info
+            .frame_rate
+            .map_or(0, |rate| frames_in(decoded.time, rate, Rounding::Nearest)),
+        time: decoded.time,
+        duration: decoded.duration,
+        image,
+    })
 }
 
 /// `count` units of `time_base` as a [`MediaTime`], rounded to the tick.

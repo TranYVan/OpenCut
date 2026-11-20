@@ -1,6 +1,7 @@
 //! The `cpal` output stream. Thin on purpose: the mixing and the clock live
 //! in `opencut-playback`, this only moves their samples to the device.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -15,6 +16,8 @@ use opencut_playback::{AudioClock, CHANNELS, Mixer, Player};
 pub(crate) struct AudioOutput {
     clock: Arc<AudioClock>,
     player: Arc<Mutex<Option<Player>>>,
+    /// Outputs silence while the clock keeps running.
+    muted: Arc<AtomicBool>,
     _stream: Stream,
 }
 
@@ -30,16 +33,18 @@ impl AudioOutput {
         let config: StreamConfig = supported.into();
         let clock = Arc::new(AudioClock::new(config.sample_rate));
         let player = Arc::new(Mutex::new(None));
+        let muted = Arc::new(AtomicBool::new(false));
         let stream = match format {
-            SampleFormat::F32 => build::<f32>(&device, config, &clock, &player),
-            SampleFormat::I16 => build::<i16>(&device, config, &clock, &player),
-            SampleFormat::U16 => build::<u16>(&device, config, &clock, &player),
+            SampleFormat::F32 => build::<f32>(&device, config, &clock, &player, &muted),
+            SampleFormat::I16 => build::<i16>(&device, config, &clock, &player, &muted),
+            SampleFormat::U16 => build::<u16>(&device, config, &clock, &player, &muted),
             other => Err(format!("unsupported audio sample format {other}")),
         }?;
         stream.play().map_err(|error| error.to_string())?;
         Ok(Self {
             clock,
             player,
+            muted,
             _stream: stream,
         })
     }
@@ -59,6 +64,10 @@ impl AudioOutput {
         *player = Some(Player::new(mixer, self.clock.clone(), at));
     }
 
+    pub(crate) fn set_muted(&self, muted: bool) {
+        self.muted.store(muted, Ordering::Relaxed);
+    }
+
     pub(crate) fn stop(&self) {
         *self.player.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -69,13 +78,14 @@ fn build<T>(
     config: StreamConfig,
     clock: &Arc<AudioClock>,
     player: &Arc<Mutex<Option<Player>>>,
+    muted: &Arc<AtomicBool>,
 ) -> Result<Stream, String>
 where
     T: SizedSample + FromSample<f32>,
 {
     let channels = usize::from(config.channels.max(1));
     let rate = f64::from(config.sample_rate);
-    let (clock, player) = (clock.clone(), player.clone());
+    let (clock, player, muted) = (clock.clone(), player.clone(), muted.clone());
     let mut mix = Vec::new();
     device
         .build_output_stream(
@@ -94,7 +104,7 @@ where
                     }
                     _ => false,
                 };
-                if !filled {
+                if !filled || muted.load(Ordering::Relaxed) {
                     mix.fill(0.0);
                 }
                 for (out, frame) in data.chunks_mut(channels).zip(mix.chunks_exact(CHANNELS)) {
